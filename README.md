@@ -3,8 +3,8 @@
 <p align="center"><strong>A local dashboard to monitor and control your MemPalace daemon</strong></p>
 
 <p align="center">
-  <a href="https://github.com/noirbizarre/butler/actions/workflows/ci.yml">
-    <img src="https://github.com/noirbizarre/butler/actions/workflows/ci.yml/badge.svg" alt="CI">
+  <a href="https://github.com/OWNER/butler/actions/workflows/ci.yml">
+    <img src="https://github.com/OWNER/butler/actions/workflows/ci.yml/badge.svg" alt="CI">
   </a>
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
 </p>
