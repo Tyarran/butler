@@ -21,8 +21,10 @@ config :phoenix_live_view,
 config :phoenix,
   sort_verified_routes_query_params: true
 
-# Never point tests at a real MemPalace installation.
+# Never point tests at a real MemPalace installation: the CLI is mocked (Mox)
+# and every path points to a non-existent location.
 config :butler,
+  cli: Butler.CLIMock,
   palace_path: "/nonexistent/butler-test/palace",
   mempalace_home: "/nonexistent/butler-test/mempalace",
   mempalace_bin: "/nonexistent/butler-test/mempalace"
