@@ -119,4 +119,71 @@ defmodule ButlerWeb.LaunchLiveTest do
       assert view |> element("#submit-output") |> render() =~ "synthetic failure"
     end
   end
+
+  describe "sweep form" do
+    test "validates the target", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/launch")
+
+      html = view |> form("#sweep-form", sweep: %{target: ""}) |> render_submit()
+
+      assert html =~ "can&#39;t be blank"
+      refute has_element?(view, "#submit-result")
+    end
+
+    test "submits a sweep and links to the job", %{conn: conn, fixture: f, project: project} do
+      expect(Butler.CLIMock, :run, fn args, _opts ->
+        assert args == ["--palace", f.palace, "sweep", project, "--daemon", "--background"]
+        submitted("sweep")
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/launch")
+      view |> form("#sweep-form", sweep: %{target: project}) |> render_submit()
+
+      assert has_element?(view, ~s(#submit-result a[href="/jobs/#{@job_id}"]))
+    end
+  end
+
+  describe "sync form" do
+    test "is labelled as dry run only and has no apply option", %{conn: conn} do
+      {:ok, view, html} = live(conn, ~p"/launch")
+
+      assert has_element?(view, "#sync-dry-run-only", "Dry run only")
+      refute has_element?(view, "#sync-form [name*='apply']")
+      refute has_element?(view, "#sync-form [name*='dry_run']")
+      refute html =~ "--apply"
+    end
+
+    test "always submits --dry-run", %{conn: conn, fixture: f} do
+      expect(Butler.CLIMock, :run, fn args, _opts ->
+        assert args == ["--palace", f.palace, "sync", "--daemon", "--background", "--dry-run"]
+        submitted("sync")
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/launch")
+      view |> form("#sync-form", sync: %{wing: ""}) |> render_submit()
+
+      assert has_element?(view, ~s(#submit-result a[href="/jobs/#{@job_id}"]))
+    end
+
+    test "passes the wing and roots", %{conn: conn, project: project} do
+      expect(Butler.CLIMock, :run, fn args, _opts ->
+        assert Enum.drop(args, 5) == ["--dry-run", "--wing", "synthetic", "--root", project]
+
+        submitted("sync")
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/launch")
+      view |> form("#sync-form", sync: %{wing: "synthetic", roots: project}) |> render_submit()
+
+      assert has_element?(view, "#submit-result", "Job submitted")
+    end
+
+    test "validates roots", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/launch")
+
+      html = view |> form("#sync-form", sync: %{roots: "rel/dir"}) |> render_submit()
+
+      assert html =~ "must be an absolute path"
+    end
+  end
 end

@@ -31,6 +31,8 @@ defmodule ButlerWeb.LaunchLive do
      socket
      |> assign(page_title: "Launch", result: nil)
      |> assign(mine_form: to_form(@mine_defaults, as: :mine))
+     |> assign(sweep_form: to_form(%{"target" => ""}, as: :sweep))
+     |> assign(sync_form: to_form(%{"wing" => "", "roots" => ""}, as: :sync))
      |> assign(modes: Args.modes(), extract_strategies: Args.extract_strategies())}
   end
 
@@ -43,6 +45,28 @@ defmodule ButlerWeb.LaunchLive do
 
       {:error, errors} ->
         {:noreply, assign(socket, mine_form: error_form(params, :mine, errors), result: nil)}
+    end
+  end
+
+  def handle_event("submit_sweep", %{"sweep" => params}, socket) do
+    case Input.sweep(params) do
+      {:ok, input} ->
+        {:noreply,
+         assign(socket, sweep_form: to_form(params, as: :sweep), result: Submit.sweep(input))}
+
+      {:error, errors} ->
+        {:noreply, assign(socket, sweep_form: error_form(params, :sweep, errors), result: nil)}
+    end
+  end
+
+  def handle_event("submit_sync", %{"sync" => params}, socket) do
+    case Input.sync(params) do
+      {:ok, input} ->
+        {:noreply,
+         assign(socket, sync_form: to_form(params, as: :sync), result: Submit.sync(input))}
+
+      {:error, errors} ->
+        {:noreply, assign(socket, sync_form: error_form(params, :sync, errors), result: nil)}
     end
   end
 
@@ -165,6 +189,48 @@ defmodule ButlerWeb.LaunchLive do
           </div>
           <button type="submit" class="btn btn-primary mt-4" phx-disable-with="Submitting…">
             <.icon name="hero-rocket-launch" class="size-4" /> Submit mine job
+          </button>
+        </.form>
+      </section>
+
+      <section class="rounded-box border border-base-300 bg-base-100 p-5 shadow-sm">
+        <h2 class="text-lg font-semibold">Sweep</h2>
+        <p class="mb-4 text-sm opacity-70">
+          Sweep a <code>.jsonl</code> transcript file, or a directory scanned recursively.
+        </p>
+
+        <.form for={@sweep_form} id="sweep-form" phx-submit="submit_sweep">
+          <.input
+            field={@sweep_form[:target]}
+            label="Target (file or directory)"
+            placeholder="/absolute/path"
+            class="w-full input"
+          />
+          <button type="submit" class="btn btn-primary mt-2" phx-disable-with="Submitting…">
+            <.icon name="hero-rocket-launch" class="size-4" /> Submit sweep job
+          </button>
+        </.form>
+      </section>
+
+      <section class="rounded-box border border-base-300 bg-base-100 p-5 shadow-sm">
+        <div class="flex items-center gap-2">
+          <h2 class="text-lg font-semibold">Sync</h2>
+          <span id="sync-dry-run-only" class="badge badge-info badge-soft">Dry run only</span>
+        </div>
+        <p class="mb-4 text-sm opacity-70">
+          Preview which drawers a sync would delete. Butler never applies a sync.
+        </p>
+
+        <.form for={@sync_form} id="sync-form" phx-submit="submit_sync">
+          <.input field={@sync_form[:wing]} label="Wing (optional)" class="w-full input" />
+          <.input
+            field={@sync_form[:roots]}
+            type="textarea"
+            label="Additional project roots (one per line, optional)"
+            rows="3"
+          />
+          <button type="submit" class="btn btn-primary mt-2" phx-disable-with="Submitting…">
+            <.icon name="hero-rocket-launch" class="size-4" /> Submit sync dry run
           </button>
         </.form>
       </section>
