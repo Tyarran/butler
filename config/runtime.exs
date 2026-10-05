@@ -23,6 +23,16 @@ end
 config :butler, ButlerWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# MemPalace installation watched by Butler (see Butler.Palace).
+# Not applied in :test, where config/test.exs points to non-existent paths so
+# that a test can never touch a real MemPalace installation.
+if config_env() != :test do
+  config :butler,
+    palace_path: System.get_env("BUTLER_PALACE_PATH", "~/.config/mempalace/palace"),
+    mempalace_home: System.get_env("BUTLER_MEMPALACE_HOME", "~/.mempalace"),
+    mempalace_bin: System.get_env("BUTLER_MEMPALACE_BIN", "mempalace")
+end
+
 if config_env() == :dev do
   # Reload browser tabs when matching files change.
   config :butler, ButlerWeb.Endpoint,

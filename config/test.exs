@@ -20,3 +20,9 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Never point tests at a real MemPalace installation.
+config :butler,
+  palace_path: "/nonexistent/butler-test/palace",
+  mempalace_home: "/nonexistent/butler-test/mempalace",
+  mempalace_bin: "/nonexistent/butler-test/mempalace"
