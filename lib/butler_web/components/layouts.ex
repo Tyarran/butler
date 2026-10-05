@@ -14,6 +14,12 @@ defmodule ButlerWeb.Layouts do
     %{id: :daemon, label: "Daemon", path: "/daemon", icon: "hero-server"},
     %{id: :jobs, label: "Jobs", path: "/jobs", icon: "hero-queue-list"},
     %{id: :launch, label: "Launch", path: "/launch", icon: "hero-rocket-launch"},
+    %{
+      id: :maintenance,
+      label: "Maintenance",
+      path: "/maintenance",
+      icon: "hero-wrench-screwdriver"
+    },
     %{id: :palace, label: "Palace", path: "/palace", icon: "hero-building-library"}
   ]
 
