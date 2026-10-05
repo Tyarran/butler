@@ -1,0 +1,27 @@
+[tools]
+erlang = "29"
+elixir = "1.20.3-otp-29"
+
+[tasks.setup]
+description = "Install dependencies and build assets"
+run = "mix setup"
+
+[tasks.server]
+description = "Start the Phoenix server"
+run = "mix phx.server"
+
+[tasks.test]
+description = "Run the test suite"
+run = "mix test"
+
+[tasks.format]
+description = "Format the code"
+run = "mix format"
+
+[tasks.lint]
+description = "Run Credo in strict mode"
+run = "mix credo --strict"
+
+[tasks.precommit]
+description = "Run all pre-commit checks"
+run = "mix precommit"
