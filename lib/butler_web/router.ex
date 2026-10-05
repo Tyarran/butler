@@ -18,6 +18,8 @@ defmodule ButlerWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+
+    live "/daemon", DaemonLive
   end
 
   # Other scopes may use custom stacks.

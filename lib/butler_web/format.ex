@@ -7,7 +7,7 @@ defmodule ButlerWeb.Format do
   @minute 60
   @hour 3_600
 
-  @doc "Formats a number of seconds, e.g. `\"5m 30s\"`, `\"2h 05m\"`; `\"—\"` for `nil`."
+  @doc "Formats a number of seconds, like 5m 30s or 2h 05m; a dash for `nil`."
   @spec duration(non_neg_integer() | nil) :: String.t()
   def duration(nil), do: @none
   def duration(seconds) when seconds < @minute, do: "#{seconds}s"
@@ -20,7 +20,7 @@ defmodule ButlerWeb.Format do
     "#{div(seconds, @hour)}h #{pad(div(rem(seconds, @hour), @minute))}m"
   end
 
-  @doc "Formats a `DateTime` in UTC to the second; `\"—\"` for `nil`."
+  @doc "Formats a `DateTime` in UTC to the second; a dash for `nil`."
   @spec datetime(DateTime.t() | nil) :: String.t()
   def datetime(nil), do: @none
 
@@ -28,7 +28,7 @@ defmodule ButlerWeb.Format do
     datetime |> DateTime.truncate(:second) |> Calendar.strftime("%Y-%m-%d %H:%M:%S UTC")
   end
 
-  @doc "Formats the time elapsed since `datetime`, e.g. `\"30s ago\"`."
+  @doc "Formats the time elapsed since `datetime`, like 30s ago."
   @spec ago(DateTime.t() | nil, DateTime.t()) :: String.t()
   def ago(datetime, now \\ DateTime.utc_now())
   def ago(nil, _now), do: @none

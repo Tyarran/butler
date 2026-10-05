@@ -52,17 +52,13 @@ defmodule Butler.Test.DaemonFixture do
   def put_env!(pairs) do
     previous = Enum.map(pairs, fn {key, _} -> {key, Application.fetch_env(:butler, key)} end)
 
-    ExUnit.Callbacks.on_exit(fn ->
-      for {key, result} <- previous do
-        case result do
-          {:ok, value} -> Application.put_env(:butler, key, value)
-          :error -> Application.delete_env(:butler, key)
-        end
-      end
-    end)
+    ExUnit.Callbacks.on_exit(fn -> Enum.each(previous, &restore_env/1) end)
 
     Enum.each(pairs, fn {key, value} -> Application.put_env(:butler, key, value) end)
   end
+
+  defp restore_env({key, {:ok, value}}), do: Application.put_env(:butler, key, value)
+  defp restore_env({key, :error}), do: Application.delete_env(:butler, key)
 
   defp write_endpoint!(dir, pid) do
     File.write!(
