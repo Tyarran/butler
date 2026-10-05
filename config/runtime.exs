@@ -30,7 +30,8 @@ if config_env() != :test do
   config :butler,
     palace_path: System.get_env("BUTLER_PALACE_PATH", "~/.config/mempalace/palace"),
     mempalace_home: System.get_env("BUTLER_MEMPALACE_HOME", "~/.mempalace"),
-    mempalace_bin: System.get_env("BUTLER_MEMPALACE_BIN", "mempalace")
+    mempalace_bin: System.get_env("BUTLER_MEMPALACE_BIN", "mempalace"),
+    daemon_state_root: System.get_env("MEMPALACE_DAEMON_STATE_ROOT")
 end
 
 if config_env() == :dev do

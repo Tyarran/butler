@@ -10,6 +10,9 @@ defmodule Butler.Palace do
     * `BUTLER_MEMPALACE_HOME` - MemPalace state home (default `~/.mempalace`)
     * `BUTLER_MEMPALACE_BIN` - `mempalace` executable (default `mempalace`,
       resolved through `PATH`)
+    * `MEMPALACE_DAEMON_STATE_ROOT` - daemon state root, same variable as the
+      daemon's (default `<home>/daemon`); it is also inherited by the CLI
+      processes Butler spawns
   """
 
   @default_palace_path "~/.config/mempalace/palace"
@@ -33,9 +36,17 @@ defmodule Butler.Palace do
     |> Path.expand()
   end
 
-  @doc "Directory holding one state directory per daemon (`<home>/daemon`)."
+  @doc """
+  Directory holding one state directory per daemon: `MEMPALACE_DAEMON_STATE_ROOT`
+  when set (the variable the daemon itself honors), `<home>/daemon` otherwise.
+  """
   @spec daemon_root() :: Path.t()
-  def daemon_root, do: Path.join(mempalace_home(), @daemon_dir)
+  def daemon_root do
+    case Application.get_env(:butler, :daemon_state_root) do
+      root when is_binary(root) and root != "" -> Path.expand(root)
+      _unset -> Path.join(mempalace_home(), @daemon_dir)
+    end
+  end
 
   @doc "The `mempalace` executable, as a name resolved through `PATH` or a path."
   @spec mempalace_bin() :: String.t()

@@ -3,7 +3,7 @@ defmodule Butler.PalaceTest do
 
   alias Butler.Palace
 
-  @keys [:palace_path, :mempalace_home, :mempalace_bin]
+  @keys [:palace_path, :mempalace_home, :mempalace_bin, :daemon_state_root]
 
   setup do
     previous = Enum.map(@keys, &{&1, Application.fetch_env(:butler, &1)})
@@ -30,6 +30,18 @@ defmodule Butler.PalaceTest do
 
   test "daemon_root/0 is the daemon directory under the MemPalace home" do
     Application.put_env(:butler, :mempalace_home, "/tmp/home/.mempalace")
+    assert Palace.daemon_root() == "/tmp/home/.mempalace/daemon"
+  end
+
+  test "daemon_root/0 honors an explicit daemon state root (MEMPALACE_DAEMON_STATE_ROOT)" do
+    Application.put_env(:butler, :mempalace_home, "/tmp/home/.mempalace")
+    Application.put_env(:butler, :daemon_state_root, "/tmp/custom/state")
+    assert Palace.daemon_root() == "/tmp/custom/state"
+  end
+
+  test "a blank daemon state root is ignored" do
+    Application.put_env(:butler, :mempalace_home, "/tmp/home/.mempalace")
+    Application.put_env(:butler, :daemon_state_root, "")
     assert Palace.daemon_root() == "/tmp/home/.mempalace/daemon"
   end
 
