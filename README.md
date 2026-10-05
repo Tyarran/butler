@@ -22,6 +22,26 @@ Butler is read-only toward the daemon's data: it reads the job queue in
 SQLite read-only and talks to the daemon exclusively through the `mempalace`
 CLI. It never reads the daemon token and never calls its HTTP API.
 
+```mermaid
+flowchart LR
+    B[Browser] -->|LiveView| W[ButlerWeb]
+    W --> C[Butler.Commands]
+    W --> J[Butler.Jobs]
+    W --> D[Butler.Daemon]
+    C -->|argument lists, timeout| CLI[Butler.CLI]
+    D -->|start / stop| CLI
+    CLI --> M[mempalace CLI]
+    M -->|submits jobs| P[(MemPalace daemon)]
+    P -->|writes| Q[(queue.sqlite3)]
+    J -->|read-only| Q
+    D -->|endpoint.json, /proc| S[daemon state dir]
+    J -.->|PubSub on change| W
+```
+
+The layers only depend downward: LiveViews render and delegate, `Butler.Commands`
+validates and orchestrates, and anything that spawns a process goes through the
+single `Butler.CLI` behaviour.
+
 ## Installation
 
 _Coming soon._
