@@ -21,6 +21,7 @@ defmodule ButlerWeb.Router do
 
     live "/daemon", DaemonLive
     live "/jobs", JobsLive
+    live "/jobs/:id", JobLive
   end
 
   # Other scopes may use custom stacks.

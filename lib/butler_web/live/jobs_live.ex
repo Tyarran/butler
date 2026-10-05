@@ -124,7 +124,11 @@ defmodule ButlerWeb.JobsLive do
   defp job_row(assigns) do
     ~H"""
     <tr id={@id}>
-      <td class="font-mono text-xs">{String.slice(@job.id, 0, 8)}</td>
+      <td class="font-mono text-xs">
+        <.link navigate={~p"/jobs/#{@job.id}"} class="link link-hover">
+          {String.slice(@job.id, 0, 8)}
+        </.link>
+      </td>
       <td>{@job.kind}</td>
       <td><.status_badge state={@job.state} /></td>
       <td class="max-w-xs truncate text-xs opacity-80" title={summary(@job)}>{summary(@job)}</td>
