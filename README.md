@@ -77,6 +77,25 @@ Then open <http://localhost:4000>:
 Butler watches the palace in `~/.config/mempalace/palace` by default; it can be
 pointed elsewhere with the `BUTLER_PALACE_PATH` environment variable.
 
+## Screenshots
+
+All screenshots are taken in demo mode, on synthetic data (`mix butler.demo`: a
+fake palace and a generated job queue; no `mempalace` command is ever run in
+that mode). Butler also ships a dark theme, selectable with the toggle at the
+bottom of the sidebar.
+
+| Daemon | Jobs |
+|---|---|
+| ![Daemon status](docs/screenshots/daemon-light.png) | ![Jobs list](docs/screenshots/jobs-light.png) |
+
+| Job detail | Launch |
+|---|---|
+| ![Job detail with mine report](docs/screenshots/job-detail-light.png) | ![Launch forms](docs/screenshots/launch-light.png) |
+
+| Maintenance |
+|---|
+| ![Direct maintenance commands](docs/screenshots/maintenance-light.png) |
+
 ## Documentation
 
 | To... | Read |
