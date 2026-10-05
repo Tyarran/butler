@@ -81,6 +81,7 @@ defmodule ButlerWeb do
       import Phoenix.HTML
       # Core UI components
       import ButlerWeb.CoreComponents
+      import ButlerWeb.UIComponents
 
       # Common modules used in templates
       alias ButlerWeb.Layouts
