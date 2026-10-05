@@ -44,11 +44,38 @@ single `Butler.CLI` behaviour.
 
 ## Installation
 
-_Coming soon._
+Butler runs from source (there is no release package yet). You need
+[mise](https://mise.jdx.dev), which installs Erlang/OTP 29 and Elixir 1.20,
+and a working [MemPalace](https://github.com/MemPalace/mempalace) installation
+with `mempalace` in your `PATH`. Linux only (daemon liveness uses `/proc`).
+
+```bash
+git clone https://github.com/OWNER/butler.git
+cd butler
+mise install        # Erlang 29 + Elixir 1.20.3-otp-29
+mise run setup      # dependencies and assets
+```
 
 ## Quickstart
 
-_Coming soon._
+Start Butler (it is a local tool, launched manually):
+
+```bash
+mise run server     # http://localhost:4000
+```
+
+Then open <http://localhost:4000>:
+
+| Page | What you do there |
+|---|---|
+| **Daemon** | See whether the daemon runs, its PID, and job counters. Start, stop or restart it. |
+| **Jobs** | Follow the queue live, filter by state or kind, open a job to read its payload, error and `mine` report. |
+| **Launch** | Submit `mine`, `sweep` and `sync` (dry run only) jobs to the daemon. |
+| **Maintenance** | Run `repair`, `compress` and `migrate-wings`: Butler stops the daemon, runs the command with live output, and restarts the daemon. |
+| **Palace** | Placeholder for a future visualization. |
+
+Butler watches the palace in `~/.config/mempalace/palace` by default; it can be
+pointed elsewhere with the `BUTLER_PALACE_PATH` environment variable.
 
 ## Documentation
 
