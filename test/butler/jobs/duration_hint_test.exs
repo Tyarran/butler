@@ -19,7 +19,12 @@ defmodule Butler.Jobs.DurationHintTest do
   end
 
   defp running(kind, seconds_ago),
-    do: %Job{id: "r", kind: kind, state: :running, started_at: DateTime.add(@now, -seconds_ago, :second)}
+    do: %Job{
+      id: "r",
+      kind: kind,
+      state: :running,
+      started_at: DateTime.add(@now, -seconds_ago, :second)
+    }
 
   describe "typical_seconds/2" do
     test "is the median of succeeded jobs of the same kind" do
