@@ -75,7 +75,60 @@ Then open <http://localhost:4000>:
 | **Palace** | Placeholder for a future visualization. |
 
 Butler watches the palace in `~/.config/mempalace/palace` by default; it can be
-pointed elsewhere with the `BUTLER_PALACE_PATH` environment variable.
+pointed elsewhere (see [Configuration](#configuration)).
+
+No MemPalace at hand? `mix butler.demo` runs Butler on synthetic data; the
+`mempalace` CLI is then replaced by a stub that executes nothing.
+
+## Configuration
+
+Butler monitors a single palace. It is configured with environment variables,
+read at startup by `config/runtime.exs`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BUTLER_PALACE_PATH` | `~/.config/mempalace/palace` | The palace to monitor and control. |
+| `BUTLER_MEMPALACE_HOME` | `~/.mempalace` | MemPalace state home; daemon state lives in `<home>/daemon/<id>/`. |
+| `MEMPALACE_DAEMON_STATE_ROOT` | `<home>/daemon` | Same variable as the daemon's own: overrides the daemon state root. Inherited by the CLI processes Butler starts. |
+| `BUTLER_MEMPALACE_BIN` | `mempalace` | The `mempalace` executable (resolved through `PATH`). |
+| `PORT` | `4000` | HTTP port. |
+
+One application setting is not an environment variable:
+`config :butler, :blocking_job_states, [:queued, :running]` lists the job
+states that make Butler refuse direct maintenance commands.
+
+## Safety rules
+
+Butler is built to be harmless to your palace. These rules are enforced by the
+code and covered by tests:
+
+- It **never reads the daemon `token` file** and **never calls the daemon HTTP
+  API**. Everything goes through the `mempalace` CLI.
+- The job queue (`queue.sqlite3`) is opened **read-only**; Butler cannot modify it.
+- Every CLI call uses an **argument list** (never a shell string) and a
+  **timeout**; on timeout the process is killed by its OS pid.
+- `sync` is **always a dry run**: `sync --apply` is not exposed and cannot be built.
+- Values are validated before reaching the CLI (absolute existing paths,
+  whitelisted modes, positive integers, nothing that looks like an option).
+- `repair`, `compress` and `migrate-wings` are **refused while jobs are queued
+  or running**; Butler stops the daemon, waits until it is really stopped,
+  re-checks the queue, runs the command, and restarts the daemon even if the
+  command fails or times out. Only one such run can happen at a time.
+- Tests use mocks and fixture databases with **synthetic data** only.
+
+### Things to know
+
+- **Stopping the daemon** waits up to 10 seconds for the running job to finish.
+  If it is still running, the daemon marks it `cancelled`; it is **not**
+  resumed automatically when the daemon starts again. Queued jobs stay queued.
+- `mempalace ... --daemon` (used by the Launch page) **starts the daemon** if it
+  is not running.
+- The CLI does not deduplicate the jobs it submits, so Butler refuses to submit
+  a job identical to a queued or running one (best effort).
+- Daemon liveness uses `/proc`: **Linux only**.
+- Out of scope for now: palace visualization, live job progress (the daemon
+  only writes a job's result when it ends), cancelling or retrying a job,
+  `sync --apply`, remote access or authentication, several palaces.
 
 ## Screenshots
 
@@ -100,7 +153,9 @@ bottom of the sidebar.
 
 | To... | Read |
 |---|---|
-| Install and try it | _Installation_, _Quickstart_ (coming soon) |
+| Install and try it | [Installation](#installation), [Quickstart](#quickstart), [Screenshots](#screenshots) |
+| Configure it | [Configuration](#configuration) |
+| Trust it | [Safety rules](#safety-rules) |
 | Understand or change it | [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) |
 
 ## Contributing
