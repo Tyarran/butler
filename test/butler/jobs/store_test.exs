@@ -25,10 +25,29 @@ defmodule Butler.Jobs.StoreTest do
     end
 
     test "puts active jobs first, then newest first", %{path: path} do
-      QueueFixture.insert_job!(path, id: "old-done", state: "succeeded", created_at: QueueFixture.iso_ago(900))
-      QueueFixture.insert_job!(path, id: "new-done", state: "failed", created_at: QueueFixture.iso_ago(100))
-      QueueFixture.insert_job!(path, id: "old-queued", state: "queued", created_at: QueueFixture.iso_ago(500))
-      QueueFixture.insert_job!(path, id: "new-running", state: "running", created_at: QueueFixture.iso_ago(300))
+      QueueFixture.insert_job!(path,
+        id: "old-done",
+        state: "succeeded",
+        created_at: QueueFixture.iso_ago(900)
+      )
+
+      QueueFixture.insert_job!(path,
+        id: "new-done",
+        state: "failed",
+        created_at: QueueFixture.iso_ago(100)
+      )
+
+      QueueFixture.insert_job!(path,
+        id: "old-queued",
+        state: "queued",
+        created_at: QueueFixture.iso_ago(500)
+      )
+
+      QueueFixture.insert_job!(path,
+        id: "new-running",
+        state: "running",
+        created_at: QueueFixture.iso_ago(300)
+      )
 
       assert ids(Store.list(path)) == ["new-running", "old-queued", "new-done", "old-done"]
     end
@@ -48,7 +67,13 @@ defmodule Butler.Jobs.StoreTest do
     end
 
     test "applies the limit", %{path: path} do
-      for n <- 1..5, do: QueueFixture.insert_job!(path, id: "j#{n}", state: "succeeded", created_at: QueueFixture.iso_ago(n))
+      for n <- 1..5,
+          do:
+            QueueFixture.insert_job!(path,
+              id: "j#{n}",
+              state: "succeeded",
+              created_at: QueueFixture.iso_ago(n)
+            )
 
       assert length(ids(Store.list(path, limit: 2))) == 2
     end
