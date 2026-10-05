@@ -20,6 +20,7 @@ defmodule ButlerWeb.Router do
     get "/", PageController, :home
 
     live "/daemon", DaemonLive
+    live "/jobs", JobsLive
   end
 
   # Other scopes may use custom stacks.

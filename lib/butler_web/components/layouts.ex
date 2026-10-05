@@ -11,7 +11,8 @@ defmodule ButlerWeb.Layouts do
   embed_templates "layouts/*"
 
   @nav_items [
-    %{id: :daemon, label: "Daemon", path: "/daemon", icon: "hero-server"}
+    %{id: :daemon, label: "Daemon", path: "/daemon", icon: "hero-server"},
+    %{id: :jobs, label: "Jobs", path: "/jobs", icon: "hero-queue-list"}
   ]
 
   @doc """
