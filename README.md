@@ -1,18 +1,46 @@
-# Butler
+<h1 align="center">Butler</h1>
 
-To start your Phoenix server:
+<p align="center"><strong>A local dashboard to monitor and control your MemPalace daemon</strong></p>
 
-* Run `mix setup` to install and setup dependencies
-* Start Phoenix endpoint with `mix phx.server` or inside IEx with `iex -S mix phx.server`
+<p align="center">
+  <a href="https://github.com/noirbizarre/butler/actions/workflows/ci.yml">
+    <img src="https://github.com/noirbizarre/butler/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
+</p>
 
-Now you can visit [`localhost:4000`](http://localhost:4000) from your browser.
+---
 
-Ready to run in production? Please [check our deployment guides](https://phoenix.hexdocs.pm/deployment.html).
+The MemPalace daemon runs mining and MCP jobs in the background, and the only
+way to follow them is to poll the CLI. Butler is a small, local Phoenix
+LiveView app that shows the daemon status and its job queue live, lets you
+submit `mine`, `sweep` and `sync` (dry-run) jobs, and runs the maintenance
+commands that need the daemon stopped (`repair`, `compress`, `migrate-wings`)
+safely.
 
-## Learn more
+Butler is read-only toward the daemon's data: it reads the job queue in
+SQLite read-only and talks to the daemon exclusively through the `mempalace`
+CLI. It never reads the daemon token and never calls its HTTP API.
 
-* Official website: https://www.phoenixframework.org/
-* Guides: https://phoenix.hexdocs.pm/overview.html
-* Docs: https://phoenix.hexdocs.pm
-* Forum: https://elixirforum.com/c/phoenix-forum
-* Source: https://github.com/phoenixframework/phoenix
+## Installation
+
+_Coming soon._
+
+## Quickstart
+
+_Coming soon._
+
+## Documentation
+
+| To... | Read |
+|---|---|
+| Install and try it | _Installation_, _Quickstart_ (coming soon) |
+| Understand or change it | [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
