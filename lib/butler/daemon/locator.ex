@@ -36,8 +36,7 @@ defmodule Butler.Daemon.Locator do
     root
     |> list_dirs()
     |> Enum.map(&read_endpoint/1)
-    |> Enum.filter(&match?(%__MODULE__{}, &1))
-    |> Enum.filter(&(normalize(&1.palace_path) == wanted))
+    |> Enum.filter(&matches?(&1, wanted))
     |> Enum.max_by(&sort_key/1, DateTime, fn -> nil end)
     |> case do
       nil -> {:error, :not_found}
@@ -73,7 +72,12 @@ defmodule Butler.Daemon.Locator do
   defp sort_key(%__MODULE__{started_at: nil}), do: ~U[1970-01-01 00:00:00Z]
   defp sort_key(%__MODULE__{started_at: started_at}), do: started_at
 
-  defp normalize(path), do: path |> Path.expand()
+  defp matches?(%__MODULE__{palace_path: palace_path}, wanted),
+    do: normalize(palace_path) == wanted
+
+  defp matches?(nil, _wanted), do: false
+
+  defp normalize(path), do: Path.expand(path)
 
   defp integer_or_nil(value) when is_integer(value), do: value
   defp integer_or_nil(_value), do: nil
