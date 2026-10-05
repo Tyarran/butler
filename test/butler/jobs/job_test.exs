@@ -124,7 +124,9 @@ defmodule Butler.Jobs.JobTest do
     test "is nil for a queued job or when timestamps are missing" do
       assert Job.duration(%Job{state: :queued}, @now) == nil
       assert Job.duration(%Job{state: :failed, started_at: nil, finished_at: nil}, @now) == nil
-      assert Job.duration(%Job{state: :succeeded, started_at: @now, finished_at: nil}, @now) == nil
+
+      assert Job.duration(%Job{state: :succeeded, started_at: @now, finished_at: nil}, @now) ==
+               nil
     end
 
     test "is never negative" do
