@@ -66,24 +66,27 @@ defmodule Butler.Jobs.Store do
   def counts(path) do
     zero = Map.new(@states, &{&1, 0})
 
-    with_connection(path, fn db ->
-      {:ok, stmt} = Sqlite3.prepare(db, "SELECT state, COUNT(*) FROM jobs GROUP BY state")
+    with {:ok, rows} <- rows(path, "SELECT state, COUNT(*) FROM jobs GROUP BY state") do
+      {:ok, Enum.reduce(rows, zero, &add_count/2)}
+    end
+  end
 
-      try do
-        Sqlite3.fetch_all(db, stmt)
-      after
-        Sqlite3.release(db, stmt)
-      end
-    end)
-    |> case do
-      {:ok, {:ok, rows}} ->
-        {:ok, Enum.reduce(rows, zero, &add_count/2)}
+  # Runs a parameterless read query and returns the raw rows.
+  defp rows(path, sql) do
+    result =
+      with_connection(path, fn db ->
+        with {:ok, stmt} <- Sqlite3.prepare(db, sql) do
+          try do
+            Sqlite3.fetch_all(db, stmt)
+          after
+            Sqlite3.release(db, stmt)
+          end
+        end
+      end)
 
-      {:ok, {:error, _reason} = error} ->
-        error
-
-      {:error, _reason} = error ->
-        error
+    case result do
+      {:ok, inner} -> inner
+      {:error, _reason} = error -> error
     end
   end
 
@@ -97,19 +100,8 @@ defmodule Butler.Jobs.Store do
   @doc "Distinct job kinds present in the queue, sorted."
   @spec kinds(db_path()) :: {:ok, [String.t()]} | {:error, term()}
   def kinds(path) do
-    with_connection(path, fn db ->
-      {:ok, stmt} = Sqlite3.prepare(db, "SELECT DISTINCT kind FROM jobs ORDER BY kind")
-
-      try do
-        Sqlite3.fetch_all(db, stmt)
-      after
-        Sqlite3.release(db, stmt)
-      end
-    end)
-    |> case do
-      {:ok, {:ok, rows}} -> {:ok, List.flatten(rows)}
-      {:ok, {:error, _reason} = error} -> error
-      {:error, _reason} = error -> error
+    with {:ok, rows} <- rows(path, "SELECT DISTINCT kind FROM jobs ORDER BY kind") do
+      {:ok, List.flatten(rows)}
     end
   end
 
@@ -133,9 +125,10 @@ defmodule Butler.Jobs.Store do
     case Sqlite3.open(path, mode: :readonly) do
       {:ok, db} ->
         try do
-          :ok = Sqlite3.set_busy_timeout(db, @busy_timeout_ms)
-          :ok = Sqlite3.execute(db, "PRAGMA query_only = ON")
-          {:ok, fun.(db)}
+          with :ok <- Sqlite3.set_busy_timeout(db, @busy_timeout_ms),
+               :ok <- Sqlite3.execute(db, "PRAGMA query_only = ON") do
+            {:ok, fun.(db)}
+          end
         after
           Sqlite3.close(db)
         end

@@ -129,6 +129,17 @@ defmodule Butler.Jobs.StoreTest do
     end
   end
 
+  describe "unreadable database" do
+    test "every reader returns an error instead of raising", %{path: path} do
+      File.write!(path, "this is not a sqlite database")
+
+      assert {:error, _} = Store.list(path)
+      assert {:error, _} = Store.get(path, "x")
+      assert {:error, _} = Store.counts(path)
+      assert {:error, _} = Store.kinds(path)
+    end
+  end
+
   describe "read-only guarantee" do
     test "any write attempt fails and leaves the data untouched", %{path: path} do
       QueueFixture.insert_job!(path, id: "keep")
