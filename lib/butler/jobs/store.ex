@@ -58,6 +58,42 @@ defmodule Butler.Jobs.Store do
     end
   end
 
+  @doc """
+  Number of jobs per state. The result always has the four keys `:queued`,
+  `:running`, `:succeeded` and `:failed`, defaulting to 0.
+  """
+  @spec counts(db_path()) :: {:ok, %{Job.state() => non_neg_integer()}} | {:error, term()}
+  def counts(path) do
+    zero = Map.new(@states, &{&1, 0})
+
+    with_connection(path, fn db ->
+      {:ok, stmt} = Sqlite3.prepare(db, "SELECT state, COUNT(*) FROM jobs GROUP BY state")
+
+      try do
+        Sqlite3.fetch_all(db, stmt)
+      after
+        Sqlite3.release(db, stmt)
+      end
+    end)
+    |> case do
+      {:ok, {:ok, rows}} ->
+        {:ok, Enum.reduce(rows, zero, &add_count/2)}
+
+      {:ok, {:error, _reason} = error} ->
+        error
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp add_count([state, count], acc) do
+    case Enum.find(@states, &(Atom.to_string(&1) == state)) do
+      nil -> acc
+      known -> Map.put(acc, known, count)
+    end
+  end
+
   @doc "Distinct job kinds present in the queue, sorted."
   @spec kinds(db_path()) :: {:ok, [String.t()]} | {:error, term()}
   def kinds(path) do
