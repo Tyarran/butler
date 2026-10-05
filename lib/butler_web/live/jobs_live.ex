@@ -14,6 +14,7 @@ defmodule ButlerWeb.JobsLive do
   alias ButlerWeb.Format
 
   @list_limit 200
+  @states ~w(queued running succeeded failed cancelled)
 
   @impl Phoenix.LiveView
   def mount(_params, _session, socket) do
@@ -21,21 +22,35 @@ defmodule ButlerWeb.JobsLive do
 
     {:ok,
      socket
-     |> assign(page_title: "Jobs")
-     |> stream_configure(:history, dom_id: &"job-#{&1.id}")
-     |> load_jobs()}
+     |> assign(page_title: "Jobs", states: @states, filters: %{state: nil, kind: nil})
+     |> stream_configure(:history, dom_id: &"job-#{&1.id}")}
   end
 
   @impl Phoenix.LiveView
-  def handle_info({:queue_changed, _snapshot}, socket), do: {:noreply, load_jobs(socket)}
+  def handle_params(params, _uri, socket) do
+    kinds = available_kinds()
+
+    filters = %{
+      state: if(params["state"] in @states, do: params["state"]),
+      kind: if(params["kind"] in kinds, do: params["kind"])
+    }
+
+    {:noreply, socket |> assign(filters: filters, kinds: kinds) |> load_jobs()}
+  end
+
+  @impl Phoenix.LiveView
+  def handle_info({:queue_changed, _snapshot}, socket) do
+    {:noreply, socket |> assign(kinds: available_kinds()) |> load_jobs()}
+  end
 
   defp load_jobs(socket) do
     now = DateTime.utc_now()
+    filters = socket.assigns.filters
 
-    case fetch_jobs() do
-      {:ok, jobs} ->
+    case fetch_jobs(filters) do
+      {:ok, jobs, all} ->
         {active, history} = Enum.split_with(jobs, &Job.active?/1)
-        hints = Map.new(active, &{&1.id, DurationHint.hint(&1, jobs, now)})
+        hints = Map.new(active, &{&1.id, DurationHint.hint(&1, all, now)})
 
         socket
         |> assign(queue?: true, active: active, hints: hints, now: now, empty?: jobs == [])
@@ -48,11 +63,50 @@ defmodule ButlerWeb.JobsLive do
     end
   end
 
-  defp fetch_jobs do
-    case Status.resolve().queue_path do
+  # Returns the filtered jobs and the unfiltered recent history (used for hints).
+  defp fetch_jobs(filters) do
+    with path when is_binary(path) <- Status.resolve().queue_path,
+         {:ok, jobs} <-
+           Store.list(path,
+             state: state_atom(filters.state),
+             kind: filters.kind,
+             limit: @list_limit
+           ) do
+      all = if filters == %{state: nil, kind: nil}, do: jobs, else: unfiltered(path, jobs)
+      {:ok, jobs, all}
+    else
       nil -> {:error, :not_found}
-      path -> Store.list(path, limit: @list_limit)
+      {:error, _reason} = error -> error
     end
+  end
+
+  defp unfiltered(path, fallback) do
+    case Store.list(path, limit: @list_limit) do
+      {:ok, all} -> all
+      {:error, _reason} -> fallback
+    end
+  end
+
+  defp available_kinds do
+    with path when is_binary(path) <- Status.resolve().queue_path,
+         {:ok, kinds} <- Store.kinds(path) do
+      kinds
+    else
+      _ -> []
+    end
+  end
+
+  # @states is a fixed whitelist, so the atoms already exist.
+  defp state_atom(nil), do: nil
+  defp state_atom(state), do: String.to_existing_atom(state)
+
+  defp filter_path(filters, changes) do
+    params =
+      filters
+      |> Map.merge(changes)
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+    ~p"/jobs?#{params}"
   end
 
   @doc false
@@ -103,6 +157,49 @@ defmodule ButlerWeb.JobsLive do
     ~H"""
     <Layouts.app flash={@flash} active={:jobs} title="Jobs">
       <p :if={!@queue?} class="text-sm opacity-70">No queue database found for this palace yet.</p>
+
+      <div :if={@queue?} id="job-filters" class="space-y-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="w-12 text-xs uppercase opacity-60">State</span>
+          <div class="join">
+            <.link
+              id="filter-state-all"
+              patch={filter_path(@filters, %{state: nil})}
+              class={["btn btn-sm join-item", is_nil(@filters.state) && "btn-active"]}
+            >
+              All
+            </.link>
+            <.link
+              :for={state <- @states}
+              id={"filter-state-#{state}"}
+              patch={filter_path(@filters, %{state: state})}
+              class={["btn btn-sm join-item", @filters.state == state && "btn-active"]}
+            >
+              {state}
+            </.link>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="w-12 text-xs uppercase opacity-60">Kind</span>
+          <div class="join">
+            <.link
+              id="filter-kind-all"
+              patch={filter_path(@filters, %{kind: nil})}
+              class={["btn btn-sm join-item", is_nil(@filters.kind) && "btn-active"]}
+            >
+              All
+            </.link>
+            <.link
+              :for={kind <- @kinds}
+              id={"filter-kind-#{kind}"}
+              patch={filter_path(@filters, %{kind: kind})}
+              class={["btn btn-sm join-item", @filters.kind == kind && "btn-active"]}
+            >
+              {kind}
+            </.link>
+          </div>
+        </div>
+      </div>
 
       <section :if={@queue?} class="space-y-2">
         <h2 class="text-sm font-semibold uppercase tracking-wide opacity-70">
