@@ -11,7 +11,8 @@ defmodule Butler.Jobs.Job do
     "queued" => :queued,
     "running" => :running,
     "succeeded" => :succeeded,
-    "failed" => :failed
+    "failed" => :failed,
+    "cancelled" => :cancelled
   }
   @active_states [:queued, :running]
 
@@ -30,7 +31,7 @@ defmodule Butler.Jobs.Job do
     attempts: 0
   ]
 
-  @type state :: :queued | :running | :succeeded | :failed | :unknown
+  @type state :: :queued | :running | :succeeded | :failed | :cancelled | :unknown
 
   @type t :: %__MODULE__{
           id: String.t(),

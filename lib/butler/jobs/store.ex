@@ -16,7 +16,7 @@ defmodule Butler.Jobs.Store do
   @default_limit 200
   @max_limit 1_000
   @busy_timeout_ms 2_000
-  @states ~w(queued running succeeded failed)a
+  @states ~w(queued running succeeded failed cancelled)a
   @active_sql "state IN ('queued', 'running')"
 
   @type db_path :: Path.t()
@@ -59,7 +59,7 @@ defmodule Butler.Jobs.Store do
   end
 
   @doc """
-  Number of jobs per state. The result always has the four keys `:queued`,
+  Number of jobs per state. The result always has the five keys `:queued`, `:cancelled`,
   `:running`, `:succeeded` and `:failed`, defaulting to 0.
   """
   @spec counts(db_path()) :: {:ok, %{Job.state() => non_neg_integer()}} | {:error, term()}

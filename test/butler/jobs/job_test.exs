@@ -51,7 +51,8 @@ defmodule Butler.Jobs.JobTest do
             {"queued", :queued},
             {"running", :running},
             {"succeeded", :succeeded},
-            {"failed", :failed}
+            {"failed", :failed},
+            {"cancelled", :cancelled}
           ] do
         assert Job.from_row(row(%{"state" => string})).state == atom
       end
