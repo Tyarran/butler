@@ -8,7 +8,9 @@
 import Config
 
 config :butler,
-  generators: [timestamp_type: :utc_datetime]
+  generators: [timestamp_type: :utc_datetime],
+  # Poll the daemon queue and broadcast changes (disabled in test).
+  start_watcher: true
 
 # Configure the endpoint
 config :butler, ButlerWeb.Endpoint,

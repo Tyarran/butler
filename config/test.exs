@@ -25,6 +25,7 @@ config :phoenix,
 # and every path points to a non-existent location.
 config :butler,
   cli: Butler.CLIMock,
+  start_watcher: false,
   palace_path: "/nonexistent/butler-test/palace",
   mempalace_home: "/nonexistent/butler-test/mempalace",
   mempalace_bin: "/nonexistent/butler-test/mempalace"
