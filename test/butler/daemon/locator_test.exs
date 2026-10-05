@@ -86,6 +86,31 @@ defmodule Butler.Daemon.LocatorTest do
     assert {:ok, %{dir: ^good}} = Locator.find(root, @palace)
   end
 
+  describe "stopped daemon (no endpoint.json)" do
+    # Computed with the daemon's own algorithm:
+    # sha256(abspath(realpath(palace)))[:24]
+    @key "487553a8cf2262446d9ed427"
+
+    test "palace_key/1 matches the daemon's directory naming" do
+      assert Locator.palace_key("/tmp/bthrow/palace") == @key
+    end
+
+    test "falls back to the directory named after the palace key", %{root: root} do
+      dir = Path.join(root, @key)
+      QueueFixture.create!(Path.join(dir, "queue.sqlite3"))
+
+      assert {:ok, found} = Locator.find(root, "/tmp/bthrow/palace")
+      assert found.dir == dir
+      assert found.queue_path == Path.join(dir, "queue.sqlite3")
+      assert found.pid == nil
+      assert found.started_at == nil
+    end
+
+    test "is not found when neither endpoint nor keyed directory exist", %{root: root} do
+      assert Locator.find(root, "/tmp/bthrow/palace") == {:error, :not_found}
+    end
+  end
+
   test "ignores a trailing slash difference in the palace path", %{root: root} do
     daemon_dir!(root, "aaa", endpoint(%{"palace_path" => @palace <> "/"}))
     assert {:ok, _} = Locator.find(root, @palace)

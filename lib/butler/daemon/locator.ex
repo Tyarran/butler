@@ -12,6 +12,7 @@ defmodule Butler.Daemon.Locator do
 
   @endpoint_file "endpoint.json"
   @queue_file "queue.sqlite3"
+  @key_length 24
 
   defstruct [:dir, :queue_path, :pid, :palace_path, :started_at, :host, :port]
 
@@ -28,6 +29,11 @@ defmodule Butler.Daemon.Locator do
   @doc """
   Locates the daemon state directory for `palace_path` under `root`
   (defaults to the configured daemon root and palace).
+
+  A running daemon is found through its `endpoint.json`. A cleanly stopped
+  daemon removes `endpoint.json` but leaves its directory (and queue) behind,
+  so the directory named after `palace_key/1` is used as a fallback; the
+  result then has no `pid` nor `started_at`.
   """
   @spec find(Path.t(), Path.t()) :: {:ok, t()} | {:error, :not_found}
   def find(root \\ Palace.daemon_root(), palace_path \\ Palace.path()) do
@@ -39,8 +45,39 @@ defmodule Butler.Daemon.Locator do
     |> Enum.filter(&matches?(&1, wanted))
     |> Enum.max_by(&sort_key/1, DateTime, fn -> nil end)
     |> case do
-      nil -> {:error, :not_found}
+      nil -> find_by_key(root, wanted)
       found -> {:ok, found}
+    end
+  end
+
+  @doc """
+  Name of the daemon state directory of a palace, computed like the daemon
+  does: the first 24 hex characters of the SHA-256 of the palace path.
+
+  Symlinks are not resolved here, unlike the daemon (`realpath`): a palace
+  reached through a symlink is still found through `endpoint.json` while
+  running.
+  """
+  @spec palace_key(Path.t()) :: String.t()
+  def palace_key(palace_path) do
+    :sha256
+    |> :crypto.hash(normalize(palace_path))
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, @key_length)
+  end
+
+  defp find_by_key(root, wanted) do
+    dir = Path.join(root, palace_key(wanted))
+
+    if File.dir?(dir) do
+      {:ok,
+       %__MODULE__{
+         dir: dir,
+         queue_path: Path.join(dir, @queue_file),
+         palace_path: wanted
+       }}
+    else
+      {:error, :not_found}
     end
   end
 
