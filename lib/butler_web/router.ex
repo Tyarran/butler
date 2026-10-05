@@ -22,6 +22,7 @@ defmodule ButlerWeb.Router do
     live "/daemon", DaemonLive
     live "/jobs", JobsLive
     live "/jobs/:id", JobLive
+    live "/launch", LaunchLive
     live "/palace", PalaceLive
   end
 

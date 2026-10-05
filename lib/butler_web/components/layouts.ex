@@ -13,6 +13,7 @@ defmodule ButlerWeb.Layouts do
   @nav_items [
     %{id: :daemon, label: "Daemon", path: "/daemon", icon: "hero-server"},
     %{id: :jobs, label: "Jobs", path: "/jobs", icon: "hero-queue-list"},
+    %{id: :launch, label: "Launch", path: "/launch", icon: "hero-rocket-launch"},
     %{id: :palace, label: "Palace", path: "/palace", icon: "hero-building-library"}
   ]
 
