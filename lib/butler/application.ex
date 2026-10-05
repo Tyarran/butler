@@ -11,7 +11,9 @@ defmodule Butler.Application do
       [
         ButlerWeb.Telemetry,
         {DNSCluster, query: Application.get_env(:butler, :dns_cluster_query) || :ignore},
-        {Phoenix.PubSub, name: Butler.PubSub}
+        {Phoenix.PubSub, name: Butler.PubSub},
+        {Task.Supervisor, name: Butler.TaskSupervisor},
+        Butler.Commands.Direct
       ] ++
         watcher_children() ++
         [
