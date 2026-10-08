@@ -5,6 +5,8 @@ defmodule Butler.Application do
 
   use Application
 
+  alias Butler.MCP
+
   @impl true
   def start(_type, _args) do
     children =
@@ -16,6 +18,7 @@ defmodule Butler.Application do
         Butler.Commands.Direct
       ] ++
         watcher_children() ++
+        mcp_children() ++
         [
           # Start to serve requests, typically the last entry
           ButlerWeb.Endpoint
@@ -29,6 +32,10 @@ defmodule Butler.Application do
 
   defp watcher_children do
     if Application.get_env(:butler, :start_watcher, true), do: [Butler.Jobs.Watcher], else: []
+  end
+
+  defp mcp_children do
+    if MCP.Config.enabled?(), do: [MCP.Supervisor], else: []
   end
 
   # Tell Phoenix to update the endpoint configuration
