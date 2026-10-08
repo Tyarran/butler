@@ -50,6 +50,9 @@ defmodule Mix.Tasks.Butler.Demo do
     Application.put_env(:butler, :mempalace_home, demo.home)
     Application.put_env(:butler, :daemon_state_root, nil)
     Application.put_env(:butler, :cli, Butler.CLI.Demo)
+    # No MCP backend process in demo mode: the MCP page shows synthetic data.
+    Application.put_env(:butler, :start_mcp, false)
+    Application.put_env(:butler, :mcp_demo, true)
 
     endpoint = Application.get_env(:butler, ButlerWeb.Endpoint, [])
     http = endpoint |> Keyword.get(:http, []) |> Keyword.put(:port, port)

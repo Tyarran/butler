@@ -20,6 +20,7 @@ defmodule ButlerWeb.Layouts do
       path: "/maintenance",
       icon: "hero-wrench-screwdriver"
     },
+    %{id: :mcp, label: "MCP", path: "/mcp", icon: "hero-cpu-chip"},
     %{id: :palace, label: "Palace", path: "/palace", icon: "hero-building-library"}
   ]
 

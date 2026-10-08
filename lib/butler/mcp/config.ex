@@ -39,6 +39,10 @@ defmodule Butler.MCP.Config do
   @spec enabled?() :: boolean()
   def enabled?, do: Application.get_env(:butler, :start_mcp, true)
 
+  @doc "Whether the MCP page shows `Butler.MCP.Demo` data (`mix butler.demo`)."
+  @spec demo?() :: boolean()
+  def demo?, do: Application.get_env(:butler, :mcp_demo, false)
+
   @doc "Idle delay, in milliseconds, after which the active process is rotated."
   @spec idle_rotation_ms() :: pos_integer()
   def idle_rotation_ms, do: get(:idle_rotation_ms, @default_idle_rotation_ms)

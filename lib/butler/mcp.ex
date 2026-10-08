@@ -17,6 +17,7 @@ defmodule Butler.MCP do
   alias Butler.MCP.Backend
   alias Butler.MCP.BackendSupervisor
   alias Butler.MCP.Config
+  alias Butler.MCP.Demo
   alias Butler.MCP.Protocol
   alias Butler.MCP.Sessions
   alias Butler.MCP.Worker
@@ -64,25 +65,30 @@ defmodule Butler.MCP do
   @doc "Snapshots of the backends, with their number of client sessions."
   @spec status() :: [backend_status()]
   def status do
-    if running?() do
-      for backend <- Config.backends() do
-        backend
-        |> BackendSupervisor.backend_name()
-        |> Backend.status()
-        |> Map.put(:sessions, Sessions.count(backend))
-      end
-    else
-      []
+    cond do
+      running?() -> live_status()
+      Config.demo?() -> Demo.status()
+      true -> []
+    end
+  end
+
+  defp live_status do
+    for backend <- Config.backends() do
+      backend
+      |> BackendSupervisor.backend_name()
+      |> Backend.status()
+      |> Map.put(:sessions, Sessions.count(backend))
     end
   end
 
   @doc "Forces the rotation of `backend` (see `Butler.MCP.Backend.restart/1`)."
   @spec restart(Config.backend()) :: :ok | {:error, :unavailable}
   def restart(backend) do
-    if running?() and Config.backend?(backend) do
-      backend |> BackendSupervisor.backend_name() |> Backend.restart()
-    else
-      {:error, :unavailable}
+    cond do
+      not Config.backend?(backend) -> {:error, :unavailable}
+      running?() -> backend |> BackendSupervisor.backend_name() |> Backend.restart()
+      Config.demo?() -> :ok
+      true -> {:error, :unavailable}
     end
   end
 
