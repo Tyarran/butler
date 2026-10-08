@@ -72,6 +72,7 @@ Then open <http://localhost:4000>:
 | **Jobs** | Follow the queue live, filter by state or kind, open a job to read its payload, error and `mine` report. |
 | **Launch** | Submit `mine`, `sweep` and `sync` (dry run only) jobs to the daemon. |
 | **Maintenance** | Run `repair`, `compress` and `migrate-wings`: Butler stops the daemon, runs the command with live output, and restarts the daemon. |
+| **MCP** | See the state of the MCP proxy backends (`full`, `light`), the time before the next rotation, client sessions and requests; force a restart. |
 | **Palace** | Placeholder for a future visualization. |
 
 Butler watches the palace in `~/.config/mempalace/palace` by default; it can be
@@ -92,10 +93,56 @@ read at startup by `config/runtime.exs`:
 | `MEMPALACE_DAEMON_STATE_ROOT` | `<home>/daemon` | Same variable as the daemon's own: overrides the daemon state root. Inherited by the CLI processes Butler starts. |
 | `BUTLER_MEMPALACE_BIN` | `mempalace` | The `mempalace` executable (resolved through `PATH`). |
 | `PORT` | `4000` | HTTP port. |
+| `BUTLER_MCP_ENABLED` | `true` | `false` disables the MCP proxy. |
+| `BUTLER_MCP_ROTATION_MINUTES` | `10` | Idle time after which a backend process is recycled. |
+| `BUTLER_MCP_FULL_BIN` | `mempalace-mcp` | Executable of the `full` backend. |
+| `BUTLER_MCP_LIGHT_BIN` | `mempalace-light-mcp` | Executable of the `light` backend. |
 
 One application setting is not an environment variable:
 `config :butler, :blocking_job_states, [:queued, :running]` lists the job
 states that make Butler refuse direct maintenance commands.
+
+## MCP proxy
+
+Each agent session normally starts its own `mempalace-mcp` Python process, and
+those processes keep their memory. Butler can serve **one shared pair of
+processes per backend** over HTTP instead:
+
+| Route | Backend |
+|---|---|
+| `POST http://localhost:4000/mcp/full` | `mempalace-mcp` (all tools) |
+| `POST http://localhost:4000/mcp/light` | `mempalace-light-mcp` (`palace_query`, `palace_exec`, `palace_coordinate`) |
+
+It speaks the MCP "Streamable HTTP" transport in its simplest form: one JSON
+request, one JSON answer, an `Mcp-Session-Id` header managed by Butler, no
+server-sent events (`GET` answers `405`, `DELETE` ends a session). It is a
+transparent proxy: every tool of the backend is exposed, writes included. It
+serves the palace Butler is configured for (`BUTLER_PALACE_PATH`).
+
+Point an MCP client at it, for example with the HTTP transport of your agent:
+
+```json
+{ "mcpServers": { "mempalace": { "type": "http", "url": "http://localhost:4000/mcp/light" } } }
+```
+
+How it works:
+
+- Each backend keeps **two** processes: an active one and a warm standby.
+- After 10 idle minutes (configurable) the standby takes over, the old process
+  is killed (its memory goes back to the system) and a new standby starts. This
+  happens even when nobody uses the proxy.
+- If the active process crashes, the requests in flight get an error right
+  away (nothing is retried, so a write is never executed twice) and the standby
+  takes over.
+- If a backend cannot start (missing binary, palace error) after 3 attempts in
+  a row, it is marked **failed** on the MCP page; **Restart** tries again.
+- Sessions belong to Butler, not to a process: rotations and crashes do not
+  invalidate them.
+
+The routes accept loopback connections only and check the `Host` and `Origin`
+headers (against DNS rebinding and web pages aiming at `localhost`). There is
+**no authentication**: anything running on your machine can use them. The
+processes' stderr goes to Butler's logs.
 
 ## Safety rules
 
@@ -106,7 +153,11 @@ code and covered by tests:
   API**. Everything goes through the `mempalace` CLI.
 - The job queue (`queue.sqlite3`) is opened **read-only**; Butler cannot modify it.
 - Every CLI call uses an **argument list** (never a shell string) and a
-  **timeout**; on timeout the process is killed by its OS pid.
+  **timeout**; on timeout the process is killed by its OS pid. The only
+  long-lived processes are the MCP proxy backends, started the same way and
+  killed by OS pid.
+- The MCP proxy **serves** HTTP on loopback but Butler still has no HTTP
+  client.
 - `sync` is **always a dry run**: `sync --apply` is not exposed and cannot be built.
 - Values are validated before reaching the CLI (absolute existing paths,
   whitelisted modes, positive integers, nothing that looks like an option).
@@ -128,7 +179,8 @@ code and covered by tests:
 - Daemon liveness uses `/proc`: **Linux only**.
 - Out of scope for now: palace visualization, live job progress (the daemon
   only writes a job's result when it ends), cancelling or retrying a job,
-  `sync --apply`, remote access or authentication, several palaces.
+  `sync --apply`, remote access or authentication, several palaces, streaming
+  (SSE) and batches in the MCP proxy.
 
 ## Screenshots
 

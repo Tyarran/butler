@@ -146,7 +146,7 @@ defmodule Butler.MCP.Backend do
       id: Keyword.fetch!(opts, :id),
       worker_supervisor: Keyword.fetch!(opts, :worker_supervisor),
       bin: Keyword.get_lazy(opts, :bin, fn -> Config.bin(Keyword.fetch!(opts, :id)) end),
-      args: Keyword.get_lazy(opts, :args, fn -> Config.args(Keyword.fetch!(opts, :id)) end),
+      args: Keyword.get(opts, :args, []),
       env: Keyword.get(opts, :env, Config.env()),
       task_supervisor: Keyword.get(opts, :task_supervisor, Butler.TaskSupervisor),
       pubsub: Keyword.get(opts, :pubsub, Butler.PubSub),

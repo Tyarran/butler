@@ -48,10 +48,11 @@ defmodule Butler.MCP.ConfigTest do
     assert Config.bin(:light) == "/tmp/fake-light"
   end
 
-  test "args/1 targets the configured palace, as an argument list" do
+  test "env/0 points the backends at the configured palace" do
     Application.put_env(:butler, :palace_path, "/tmp/some/palace")
-    assert Config.args(:full) == ["--palace", "/tmp/some/palace"]
-    assert Config.args(:light) == ["--palace", "/tmp/some/palace"]
+
+    assert %{"MEMPALACE_PALACE_PATH" => "/tmp/some/palace", "MEMPALACE_MCP_IDLE_HOURS" => "0"} =
+             Config.env()
   end
 
   test "backend?/1 accepts only the known backends" do

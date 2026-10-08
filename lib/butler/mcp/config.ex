@@ -73,19 +73,20 @@ defmodule Butler.MCP.Config do
     |> Keyword.get(:bin, Map.fetch!(@default_bins, backend))
   end
 
-  @doc "The argument list `backend` is started with: it serves the Butler palace."
-  @spec args(backend()) :: [String.t()]
-  def args(backend) when backend in @backends, do: ["--palace", Palace.path()]
-
   @doc """
   Extra environment of the backend processes.
 
-  `MEMPALACE_MCP_IDLE_HOURS=0` disables MemPalace's own idle-exit watchdog:
-  Butler decides when a process is recycled, a process leaving on its own
-  would look like a crash.
+    * `MEMPALACE_PALACE_PATH` points them at the Butler palace. The
+      environment is used instead of `--palace` because
+      `mempalace-light-mcp` 3.10.0 crashes on that option.
+    * `MEMPALACE_MCP_IDLE_HOURS=0` disables MemPalace's own idle-exit
+      watchdog: Butler decides when a process is recycled, and a process
+      leaving on its own would look like a crash.
   """
   @spec env() :: %{String.t() => String.t()}
-  def env, do: %{"MEMPALACE_MCP_IDLE_HOURS" => "0"}
+  def env do
+    %{"MEMPALACE_PALACE_PATH" => Palace.path(), "MEMPALACE_MCP_IDLE_HOURS" => "0"}
+  end
 
   defp get(key, default), do: :mcp |> env() |> Keyword.get(key, default)
 
