@@ -14,6 +14,19 @@ defmodule ButlerWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # MCP proxy: no session, no CSRF, no authentication. Loopback only.
+  pipeline :mcp do
+    plug ButlerWeb.Plugs.MCPGuard
+  end
+
+  scope "/mcp", ButlerWeb do
+    pipe_through :mcp
+
+    post "/:backend", MCPController, :post
+    delete "/:backend", MCPController, :delete
+    get "/:backend", MCPController, :stream
+  end
+
   scope "/", ButlerWeb do
     pipe_through :browser
 
