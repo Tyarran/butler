@@ -14,6 +14,23 @@ defmodule Butler.OSProcess do
   def term_grace_ms, do: @term_grace_ms
 
   @doc """
+  Resolves `bin`: a path (when it contains a `/`) must be a regular file,
+  a bare name is looked up in `PATH`.
+  """
+  @spec find_executable(String.t()) ::
+          {:ok, Path.t()} | {:error, {:executable_not_found, String.t()}}
+  def find_executable(bin) do
+    found =
+      if String.contains?(bin, "/") do
+        if File.regular?(bin), do: bin
+      else
+        System.find_executable(bin)
+      end
+
+    if found, do: {:ok, found}, else: {:error, {:executable_not_found, bin}}
+  end
+
+  @doc """
   Returns the OS pid of `port`, or `nil` when the port is already closed.
   """
   @spec os_pid(port()) :: non_neg_integer() | nil

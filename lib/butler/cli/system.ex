@@ -29,7 +29,7 @@ defmodule Butler.CLI.System do
     on_output = Keyword.get(opts, :on_output, fn _line -> :ok end)
 
     with :ok <- validate_args(args),
-         {:ok, executable} <- find_executable(bin) do
+         {:ok, executable} <- OSProcess.find_executable(bin) do
       execute(executable, args, timeout, on_output)
     end
   end
@@ -43,17 +43,6 @@ defmodule Butler.CLI.System do
   end
 
   defp validate_args(args), do: {:error, {:invalid_args, args}}
-
-  defp find_executable(bin) do
-    found =
-      if String.contains?(bin, "/") do
-        if File.regular?(bin), do: bin
-      else
-        Elixir.System.find_executable(bin)
-      end
-
-    if found, do: {:ok, found}, else: {:error, {:executable_not_found, bin}}
-  end
 
   defp execute(executable, args, timeout, on_output) do
     port =
