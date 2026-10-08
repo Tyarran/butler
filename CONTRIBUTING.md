@@ -61,10 +61,13 @@ Butler is idiomatic Elixir. Nothing more, nothing less.
 These are non-negotiable and covered by tests (see also [AGENTS.md](AGENTS.md)):
 
 1. Never read the daemon `token` file.
-2. Never call the daemon HTTP API.
+2. Never call the daemon HTTP API (Butler serves the loopback-only MCP proxy
+   routes, but has no HTTP client).
 3. The queue SQLite database is opened **read-only**.
 4. Every CLI call goes through the `Butler.CLI` behaviour, with an argument
-   list (never a shell string) and a timeout.
+   list (never a shell string) and a timeout. Sole exception:
+   `Butler.MCP.Worker` keeps long-lived MCP backend processes (argument list,
+   configured binaries, kill by `os_pid`).
 5. Tests use [Mox](https://hex.pm/packages/mox) and fixture SQLite databases
    with **synthetic** data. Never put real diary or `mcp_tool` content in
    fixtures, docs or screenshots.

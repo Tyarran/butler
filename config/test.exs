@@ -26,6 +26,13 @@ config :phoenix,
 config :butler,
   cli: Butler.CLIMock,
   start_watcher: false,
+  start_mcp: false,
+  mcp: [
+    backends: %{
+      full: [bin: "/nonexistent/butler-test/mempalace-mcp"],
+      light: [bin: "/nonexistent/butler-test/mempalace-light-mcp"]
+    }
+  ],
   palace_path: "/nonexistent/butler-test/palace",
   mempalace_home: "/nonexistent/butler-test/mempalace",
   mempalace_bin: "/nonexistent/butler-test/mempalace"

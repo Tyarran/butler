@@ -32,6 +32,19 @@ if config_env() != :test do
     mempalace_home: System.get_env("BUTLER_MEMPALACE_HOME", "~/.mempalace"),
     mempalace_bin: System.get_env("BUTLER_MEMPALACE_BIN", "mempalace"),
     daemon_state_root: System.get_env("MEMPALACE_DAEMON_STATE_ROOT")
+
+  # MCP proxy (see Butler.MCP.Config). Disabled with BUTLER_MCP_ENABLED=false.
+  rotation_minutes = String.to_integer(System.get_env("BUTLER_MCP_ROTATION_MINUTES", "10"))
+
+  config :butler,
+    start_mcp: System.get_env("BUTLER_MCP_ENABLED", "true") != "false",
+    mcp: [
+      idle_rotation_ms: rotation_minutes * 60_000,
+      backends: %{
+        full: [bin: System.get_env("BUTLER_MCP_FULL_BIN", "mempalace-mcp")],
+        light: [bin: System.get_env("BUTLER_MCP_LIGHT_BIN", "mempalace-light-mcp")]
+      }
+    ]
 end
 
 if config_env() == :dev do
@@ -69,11 +82,9 @@ if config_env() == :prod do
   config :butler, ButlerWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
-      # Enable IPv6 and bind on all interfaces.
-      # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
-      # See the documentation on https://bandit.hexdocs.pm/Bandit.html#t:options/0
-      # for details about using IPv6 vs IPv4 and loopback vs public addresses.
-      ip: {0, 0, 0, 0, 0, 0, 0, 0}
+      # Butler is a local tool and the MCP proxy has no authentication:
+      # always bind on the loopback interface only.
+      ip: {127, 0, 0, 1}
     ],
     secret_key_base: secret_key_base
 

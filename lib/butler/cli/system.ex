@@ -13,10 +13,10 @@ defmodule Butler.CLI.System do
 
   @behaviour Butler.CLI
 
+  alias Butler.OSProcess
   alias Butler.Palace
 
   @default_timeout_ms 30_000
-  @term_grace_ms 2_000
 
   @doc "Default timeout, in milliseconds, when none is given."
   @spec default_timeout_ms() :: pos_integer()
@@ -66,11 +66,7 @@ defmodule Butler.CLI.System do
       ])
 
     # nil when the process already exited (Port.info/2 returns nil for a closed port).
-    os_pid =
-      case Port.info(port, :os_pid) do
-        {:os_pid, pid} -> pid
-        _closed -> nil
-      end
+    os_pid = OSProcess.os_pid(port)
 
     deadline = Elixir.System.monotonic_time(:millisecond) + timeout
 
@@ -104,35 +100,17 @@ defmodule Butler.CLI.System do
   end
 
   defp terminate(%{port: port, os_pid: os_pid}) do
-    signal(os_pid, "TERM")
+    OSProcess.signal(os_pid, "TERM")
 
     receive do
       {^port, {:exit_status, _status}} -> :ok
     after
-      @term_grace_ms ->
-        signal(os_pid, "KILL")
-        close(port)
+      OSProcess.term_grace_ms() ->
+        OSProcess.signal(os_pid, "KILL")
+        OSProcess.close(port)
     end
 
     flush(port)
-  end
-
-  defp signal(nil, _name), do: :ok
-
-  defp signal(os_pid, name) do
-    case Elixir.System.find_executable("kill") do
-      nil ->
-        :ok
-
-      kill ->
-        Elixir.System.cmd(kill, ["-#{name}", Integer.to_string(os_pid)], stderr_to_stdout: true)
-    end
-  end
-
-  defp close(port) do
-    Port.close(port)
-  rescue
-    ArgumentError -> :ok
   end
 
   defp flush(port) do
