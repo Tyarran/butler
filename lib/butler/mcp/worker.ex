@@ -306,8 +306,13 @@ defmodule Butler.MCP.Worker do
     end)
   end
 
+  # A process that already exited closes its port: the `exit_status` message
+  # is on its way and reports the failure, so the write is simply dropped.
   defp write(%{port: port}, message) do
     Port.command(port, Protocol.encode_line(message))
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   defp kill(%{exited?: true}), do: :ok

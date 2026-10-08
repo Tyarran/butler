@@ -5,6 +5,7 @@
 #
 #   never_start    never answers `initialize`
 #   exit_on_start  exits immediately with status 3
+#   exit_unless_file <path>  exits with status 3 unless <path> exists
 #   (default)      behaves like a healthy backend
 #
 #   crash          exits with status 1 without answering
@@ -17,6 +18,7 @@
 case "${1:-normal}" in
   never_start) exec sleep 3600 ;;
   exit_on_start) exit 3 ;;
+  exit_unless_file) [ -e "$2" ] || exit 3 ;;
 esac
 
 reply() { printf '%s\n' "$1"; }
