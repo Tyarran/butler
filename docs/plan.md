@@ -215,7 +215,7 @@ field?}}`: 400 `invalid_payload`, 401 `unauthorized`, 403 `forbidden` /
   request reaches a worker while active; reads allowed during mine; resume on
   failure/timeout/crash; no live MCP worker during the run; write tools refused by
   the proxy. Commit: `feat(mcp): gate the proxy during maintenance jobs`.
-- **Phase 6 - HTTP API.** `JobController`, `HealthController`, `JobJSON`,
+- **Phase 6 - DONE. HTTP API.** `JobController`, `HealthController`, `JobJSON`,
   `Plugs.APIAuth`, rename `MCPGuard` to `LoopbackGuard`, `/api/v1` scope, endpoint
   body cap, `docs/api.md` (including the mapping from pi-palace's
   `submitDailyMineJob`, `submitMcpToolJob`, `submitMcpToolJobWaiting`; the last one

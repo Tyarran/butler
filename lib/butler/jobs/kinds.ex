@@ -23,12 +23,14 @@ defmodule Butler.Jobs.Kinds do
   Blank optional values (`nil`, `""`, `false`, `[]`) are omitted.
   """
 
+  alias Butler.Jobs.Runner
   alias Butler.Palace
 
   @modes ~w(projects convos extract)
   @extract_strategies ~w(exchange general)
 
   @kinds ~w(mine sweep sync repair compress migrate-wings diary_write mcp_tool)
+  @api_kinds ~w(mine sweep sync diary_write mcp_tool)
   @idempotent_kinds ~w(mine sweep sync)
   @maintenance_kinds ~w(repair compress migrate-wings)
 
@@ -79,6 +81,14 @@ defmodule Butler.Jobs.Kinds do
   @doc "Every job kind the worker can run."
   @spec kinds() :: [String.t()]
   def kinds, do: @kinds
+
+  @doc "Kinds the HTTP API accepts; the maintenance kinds are UI-only."
+  @spec api_kinds() :: [String.t()]
+  def api_kinds, do: @api_kinds
+
+  @doc "Whether the HTTP API accepts jobs of `kind`."
+  @spec api_kind?(term()) :: boolean()
+  def api_kind?(kind), do: kind in @api_kinds
 
   @doc "Kinds that may safely run again after a crash (`recover_running`, shutdown)."
   @spec idempotent_kinds() :: [String.t()]
@@ -216,6 +226,89 @@ defmodule Butler.Jobs.Kinds do
     do: maintenance("migrate-wings", ["--yes"], [], payload, opts)
 
   def argv(_kind, _payload, _opts), do: {:error, :unknown_kind}
+
+  @type payload_error :: :unknown_kind | {:invalid, field :: String.t() | nil, String.t()}
+
+  @doc """
+  Validates the payload of a job of `kind` at submit time, with the very rules
+  the worker applies when it runs the job (`argv/3`, `Runner.MCP.request/3`).
+
+  A missing payload is an empty one. A client-supplied palace (`palace_path`,
+  `palace`) is refused: Butler always uses its own. Returns the payload to
+  store; for `sync`, `dry_run` is made explicit (`true` unless given).
+  """
+  @spec validate_payload(term(), term()) :: {:ok, map()} | {:error, payload_error()}
+  def validate_payload(kind, payload) when kind in @kinds do
+    case payload || %{} do
+      %{} = payload ->
+        with :ok <- no_palace(payload), do: validate_kind(kind, payload)
+
+      _other ->
+        {:error, {:invalid, "payload", "payload must be an object"}}
+    end
+  end
+
+  def validate_payload(_kind, _payload), do: {:error, :unknown_kind}
+
+  defp no_palace(payload) do
+    case Enum.find(Map.keys(payload), &(to_string(&1) in ~w(palace_path palace))) do
+      nil ->
+        :ok
+
+      key ->
+        {:error,
+         {:invalid, to_string(key), "#{key} is not accepted: Butler always uses its own palace"}}
+    end
+  end
+
+  defp validate_kind(kind, payload) when kind in ~w(diary_write mcp_tool) do
+    case Runner.MCP.request(kind, payload) do
+      {:ok, _name, _arguments} -> {:ok, payload}
+      {:error, message} -> {:error, {:invalid, message_field(message), message}}
+    end
+  end
+
+  defp validate_kind(kind, payload) do
+    with :ok <- sync_scope(kind, payload),
+         {:ok, _argv} <- argv(kind, payload, palace: "/validation") do
+      {:ok, if(kind == "sync", do: sync_default(payload), else: payload)}
+    else
+      {:error, {:invalid, key}} -> {:error, {:invalid, to_string(key), "#{key} is invalid"}}
+      {:error, {:unknown_option, key}} -> {:error, {:invalid, to_string(key), "unknown key"}}
+      {:error, {:invalid, _, _}} = error -> error
+    end
+  end
+
+  defp sync_scope("sync", payload) do
+    values = Map.new(payload, fn {key, value} -> {to_string(key), value} end)
+
+    if Map.get(values, "dry_run") == false and blank?(Map.get(values, "wing")) and
+         blank?(Map.get(values, "roots")) do
+      {:error, {:invalid, "dry_run", "applying a sync (dry_run false) needs a wing or roots"}}
+    else
+      :ok
+    end
+  end
+
+  defp sync_scope(_kind, _payload), do: :ok
+
+  defp sync_default(payload) do
+    if Enum.any?(Map.keys(payload), &(to_string(&1) == "dry_run")),
+      do: payload,
+      else: Map.put(payload, "dry_run", true)
+  end
+
+  # The MCP request builder only returns messages: recover the key they name.
+  defp message_field("unknown payload key: " <> key), do: key
+  defp message_field("tool is not in the write allowlist" <> _rest), do: "name"
+  defp message_field("arguments " <> _rest), do: "arguments"
+
+  defp message_field(message) do
+    case String.split(message, " ", parts: 2) do
+      [key, "must be" <> _rest] -> key
+      _other -> nil
+    end
+  end
 
   defp maintenance(command, fixed, extra_keys, payload, opts) do
     specs = Enum.filter(@compress_options, &(elem(&1, 0) in extra_keys))

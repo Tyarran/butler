@@ -15,6 +15,12 @@ defmodule ButlerWeb.ErrorJSON do
   # By default, Phoenix returns the status message from
   # the template name. For example, "404.json" becomes
   # "Not Found".
+  def render("400.json", _assigns),
+    do: ButlerWeb.APIError.body("invalid_payload", "The request body is not valid JSON")
+
+  def render("413.json", _assigns),
+    do: ButlerWeb.APIError.body("too_large", "The request body is too large (limit 1 MB)")
+
   def render(template, _assigns) do
     %{errors: %{detail: Phoenix.Controller.status_message_from_template(template)}}
   end

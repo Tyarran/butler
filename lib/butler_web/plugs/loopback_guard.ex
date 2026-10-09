@@ -1,6 +1,7 @@
-defmodule ButlerWeb.Plugs.MCPGuard do
+defmodule ButlerWeb.Plugs.LoopbackGuard do
   @moduledoc """
-  Guards the MCP proxy routes, which have no authentication.
+  Restricts a route to local clients: the MCP proxy routes (no authentication)
+  and, before `ButlerWeb.Plugs.APIAuth`, the `/api/v1` routes.
 
   Three checks protect against other machines and against web pages that
   aim at `localhost` (cross-origin requests, DNS rebinding). A request failing
@@ -28,10 +29,7 @@ defmodule ButlerWeb.Plugs.MCPGuard do
     if loopback_peer?(conn.remote_ip) and loopback_host?(conn.host) and allowed_origin?(conn) do
       conn
     else
-      conn
-      |> put_resp_content_type("application/json")
-      |> send_resp(403, Jason.encode!(%{error: "Forbidden"}))
-      |> halt()
+      ButlerWeb.APIError.halt(conn, 403, "forbidden", "Forbidden: loopback clients only")
     end
   end
 

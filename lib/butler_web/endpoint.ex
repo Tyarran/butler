@@ -45,6 +45,8 @@ defmodule ButlerWeb.Endpoint do
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
+    # The job API takes verbatim diary / tool payloads: 1 MB, not the 8 MB default.
+    length: 1_000_000,
     json_decoder: Phoenix.json_library()
 
   plug Plug.MethodOverride

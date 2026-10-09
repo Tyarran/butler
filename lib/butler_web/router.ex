@@ -10,13 +10,24 @@ defmodule ButlerWeb.Router do
     plug :put_secure_browser_headers
   end
 
+  # Job API: loopback + Host + Origin, then the Bearer token, then JSON.
   pipeline :api do
+    plug ButlerWeb.Plugs.LoopbackGuard
+    plug ButlerWeb.Plugs.APIAuth
     plug :accepts, ["json"]
   end
 
   # MCP proxy: no session, no CSRF, no authentication. Loopback only.
   pipeline :mcp do
-    plug ButlerWeb.Plugs.MCPGuard
+    plug ButlerWeb.Plugs.LoopbackGuard
+  end
+
+  scope "/api/v1", ButlerWeb do
+    pipe_through :api
+
+    post "/jobs", JobController, :create
+    get "/jobs/:id", JobController, :show
+    get "/health", HealthController, :show
   end
 
   scope "/mcp", ButlerWeb do
@@ -40,11 +51,6 @@ defmodule ButlerWeb.Router do
     live "/mcp", MCPLive
     live "/palace", PalaceLive
   end
-
-  # Other scopes may use custom stacks.
-  # scope "/api", ButlerWeb do
-  #   pipe_through :api
-  # end
 
   # Enable LiveDashboard in development
   if Application.compile_env(:butler, :dev_routes) do
