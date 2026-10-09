@@ -21,6 +21,9 @@ defmodule ButlerWeb.ErrorJSON do
   def render("413.json", _assigns),
     do: ButlerWeb.APIError.body("too_large", "The request body is too large (limit 1 MB)")
 
+  def render("404.json", _assigns),
+    do: ButlerWeb.APIError.body("not_found", "Not found")
+
   def render(template, _assigns) do
     %{errors: %{detail: Phoenix.Controller.status_message_from_template(template)}}
   end

@@ -16,6 +16,7 @@ defmodule ButlerWeb.JobController do
 
   @body_keys ~w(kind payload dedupe_key priority)
   @max_dedupe_key 200
+  @max_priority 1_000_000
 
   @doc "Enqueues a job."
   def create(conn, _params) do
@@ -92,7 +93,13 @@ defmodule ButlerWeb.JobController do
 
   defp dedupe_key(_body), do: {:ok, nil}
 
-  defp priority(%{"priority" => priority}) when is_integer(priority), do: {:ok, priority}
+  defp priority(%{"priority" => priority})
+       when is_integer(priority) and abs(priority) <= @max_priority,
+       do: {:ok, priority}
+
+  defp priority(%{"priority" => priority}) when is_integer(priority),
+    do: invalid("priority", "priority must be between -#{@max_priority} and #{@max_priority}")
+
   defp priority(%{"priority" => nil}), do: {:ok, 0}
   defp priority(%{"priority" => _other}), do: invalid("priority", "priority must be an integer")
   defp priority(_body), do: {:ok, 0}

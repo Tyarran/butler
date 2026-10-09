@@ -19,7 +19,10 @@ config :butler, ButlerWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
   render_errors: [
-    formats: [html: ButlerWeb.ErrorHTML, json: ButlerWeb.ErrorJSON],
+    # JSON first: it is the fallback format for `Accept: */*` and for no
+    # `Accept` at all (API clients, parser errors raised before the router).
+    # Browsers ask for `text/html` and still get the HTML pages.
+    formats: [json: ButlerWeb.ErrorJSON, html: ButlerWeb.ErrorHTML],
     layout: false
   ],
   pubsub_server: Butler.PubSub,
@@ -59,6 +62,9 @@ config :logger, :default_formatter,
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
+
+# Never log verbatim job content (API bodies, diary entries, tool arguments).
+config :phoenix, :filter_parameters, ["password", "payload", "entry", "arguments", "token"]
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

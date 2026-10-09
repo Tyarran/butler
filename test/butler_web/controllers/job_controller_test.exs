@@ -73,7 +73,44 @@ defmodule ButlerWeb.JobControllerTest do
     end
   end
 
+  describe "body parser errors" do
+    test "an oversized body is a JSON 413 whatever the Accept header", %{conn: conn} do
+      body =
+        Jason.encode!(%{kind: "diary_write", payload: %{entry: String.duplicate("a", 1_100_000)}})
+
+      for accept <- ["*/*", "application/json"] do
+        {413, _headers, response} =
+          assert_error_sent 413, fn ->
+            conn |> put_req_header("accept", accept) |> raw(body)
+          end
+
+        assert %{"error" => %{"code" => "too_large"}} = Jason.decode!(response)
+      end
+    end
+
+    test "malformed JSON is a JSON 400", %{conn: conn} do
+      {400, _headers, response} =
+        assert_error_sent 400, fn ->
+          conn |> put_req_header("accept", "*/*") |> raw("{not json")
+        end
+
+      assert %{"error" => %{"code" => "invalid_payload"}} = Jason.decode!(response)
+    end
+  end
+
   describe "POST /api/v1/jobs" do
+    test "refuses a priority outside the bounded range", %{conn: conn} do
+      for priority <- [1_000_001, -1_000_001, 9_223_372_036_854_775_808] do
+        conn = submit(conn, %{kind: "sweep", payload: %{target: "/tmp/s"}, priority: priority})
+        assert %{"code" => "invalid_payload", "field" => "priority"} = error_of(conn, 400)
+      end
+
+      assert %{"job" => _} =
+               conn
+               |> submit(%{kind: "sweep", payload: %{target: "/tmp/s"}, priority: -1_000_000})
+               |> json_response(202)
+    end
+
     test "enqueues a mine job (202)", %{conn: conn} do
       conn =
         submit(conn, %{
