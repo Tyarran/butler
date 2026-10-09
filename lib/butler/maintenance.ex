@@ -9,6 +9,11 @@ defmodule Butler.Maintenance do
   without going through a process; only this server writes it, and the job
   worker is its only client (`enter/1`, `leave/0`).
 
+  Known limit: the flag is fail-open. A missing table reads as inactive, and a
+  restarted server starts `:inactive`; the worker re-asserts it (`enter/1` is
+  idempotent) just before it suspends the proxy, and clears a stale flag at
+  boot, but a restart in the middle of a run leaves the gate open until then.
+
   `leave/0` is idempotent. Changes are broadcast as
   `{:maintenance_changed, state}` (`:active` or `:inactive`) on the
   `"butler:worker"` topic.
@@ -48,9 +53,16 @@ defmodule Butler.Maintenance do
     ArgumentError -> nil
   end
 
-  @doc "Turns maintenance mode on for `job_id`. Returns `:ok`, even when it already was on."
-  @spec enter(String.t() | nil) :: :ok
-  def enter(job_id \\ nil), do: GenServer.call(__MODULE__, {:enter, job_id})
+  @doc """
+  Turns maintenance mode on for `job_id`. Returns `:ok`, even when it already
+  was on, and `{:error, :unavailable}` when the server does not answer.
+  """
+  @spec enter(String.t() | nil) :: :ok | {:error, :unavailable}
+  def enter(job_id \\ nil) do
+    GenServer.call(__MODULE__, {:enter, job_id})
+  catch
+    :exit, _reason -> {:error, :unavailable}
+  end
 
   @doc "Turns maintenance mode off. Idempotent; `:ok` when the server is gone."
   @spec leave() :: :ok

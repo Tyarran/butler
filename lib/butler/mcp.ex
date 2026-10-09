@@ -117,7 +117,7 @@ defmodule Butler.MCP do
       results =
         for backend <- Config.backends() do
           remaining = max(deadline - System.monotonic_time(:millisecond), 0)
-          backend |> BackendSupervisor.backend_name() |> Backend.drain(remaining)
+          drain_backend(backend, remaining)
         end
 
       if :timeout in results, do: :timeout, else: :ok
@@ -126,25 +126,44 @@ defmodule Butler.MCP do
     end
   end
 
+  # A backend that is restarting (or does not answer) counts as not drained.
+  defp drain_backend(backend, remaining) do
+    backend |> BackendSupervisor.backend_name() |> Backend.drain(remaining)
+  catch
+    :exit, _reason -> :timeout
+  end
+
   @doc """
   Maintenance: stops every proxy worker (and their OS processes) and starts
-  none until `resume/0`. `:ok` when the proxy is not running.
+  none until `resume/0`. `:ok` when the proxy is not running. When a backend
+  cannot be suspended (timeout, restart) the result is `{:error, reason}`:
+  proxy processes may still be alive, so the caller must not start the CLI.
   """
-  @spec suspend() :: :ok
+  @spec suspend() :: :ok | {:error, term()}
   def suspend, do: each_backend(&Backend.suspend/1)
 
   @doc "Ends the suspension: the backends start fresh workers. Idempotent."
-  @spec resume() :: :ok
+  @spec resume() :: :ok | {:error, term()}
   def resume, do: each_backend(&Backend.resume/1)
 
+  # Every backend is tried, even after a failure; the first failure is returned.
   defp each_backend(fun) do
     if running?() do
-      for backend <- Config.backends(), do: backend |> BackendSupervisor.backend_name() |> fun.()
-    end
+      results =
+        for backend <- Config.backends() do
+          backend |> BackendSupervisor.backend_name() |> call_backend(fun)
+        end
 
-    :ok
+      Enum.find(results, :ok, &(&1 != :ok))
+    else
+      :ok
+    end
+  end
+
+  defp call_backend(name, fun) do
+    fun.(name)
   catch
-    :exit, _reason -> :ok
+    :exit, reason -> {:error, {:backend_unavailable, reason}}
   end
 
   @doc "Subscribes the caller to `{:mcp_changed, backend}` notifications."
@@ -221,6 +240,11 @@ defmodule Butler.MCP do
 
   defp checkout(backend), do: backend |> BackendSupervisor.backend_name() |> Backend.checkout()
 
+  # Between the end of a maintenance (proxy resumed first, gate left after)
+  # and a request that already passed the gate: same answer as the gate.
+  defp failure(_backend, id, :suspended),
+    do: {:json, Protocol.error(id, @maintenance_code, @maintenance_message)}
+
   defp failure(backend, id, reason) do
     backend |> BackendSupervisor.backend_name() |> Backend.record_error()
     {:json, Protocol.internal_error(id, describe(reason))}
@@ -232,7 +256,6 @@ defmodule Butler.MCP do
   defp describe({:failed, reason}),
     do: "The MemPalace backend failed to start: #{inspect(reason)}"
 
-  defp describe(:suspended), do: @maintenance_message
   defp describe(:unavailable), do: "The MemPalace backend is still starting"
   defp describe(_other), do: "The MemPalace backend is unavailable"
 

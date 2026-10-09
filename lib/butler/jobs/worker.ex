@@ -143,6 +143,11 @@ defmodule Butler.Jobs.Worker do
 
   @impl GenServer
   def handle_continue(:boot, state) do
+    # A worker killed without `terminate/2` may have left the gate closed and
+    # the proxy suspended; no maintenance job runs at boot. Both are idempotent.
+    Maintenance.leave()
+    MCP.resume()
+
     with {:ok, state} <- reap_orphans(state),
          {:ok, _recovered} <- Queue.recover_running(state.queue, Kinds.idempotent_kinds()),
          {:ok, _pruned} <- Queue.prune_terminal(state.queue, Queue.retention_days()) do
@@ -293,15 +298,24 @@ defmodule Butler.Jobs.Worker do
       drain: state.drain_ms
     }
 
-    if Kinds.maintenance?(job.kind), do: Maintenance.enter(id)
+    if Kinds.maintenance?(job.kind) and Maintenance.enter(id) != :ok do
+      # The gate cannot be closed: never run, try again after a cooldown.
+      error = %{class: "MaintenanceUnavailable", message: "maintenance gate unavailable"}
+      Queue.defer(state.queue, id, job.started_at, error)
 
-    task =
-      Task.Supervisor.async_nolink(state.task_supervisor, fn -> run_job(job, run_opts, ctx) end)
+      schedule_wake(%{
+        state
+        | cooldowns: Map.put(state.cooldowns, id, now_ms() + state.lock_backoff_ms)
+      })
+    else
+      task =
+        Task.Supervisor.async_nolink(state.task_supervisor, fn -> run_job(job, run_opts, ctx) end)
 
-    set_status(
-      %{state | job: job, task: task, os_pid: nil, cancelling?: false},
-      :running
-    )
+      set_status(
+        %{state | job: job, task: task, os_pid: nil, cancelling?: false},
+        :running
+      )
+    end
   end
 
   # Write MCP jobs go through the persistent writer. Every other job is a CLI
@@ -318,7 +332,10 @@ defmodule Butler.Jobs.Worker do
     if Kinds.maintenance?(job.kind) do
       try do
         _ = MCP.drain(ctx.drain)
-        run_cli(job, run_opts, ctx, &MCP.suspend/0)
+        # Re-assert the gate (idempotent): `Maintenance` may have restarted.
+        run_cli(job, run_opts, ctx, fn ->
+          with :ok <- Maintenance.enter(job.id), do: MCP.suspend()
+        end)
       after
         leave_maintenance(job)
       end
@@ -330,8 +347,14 @@ defmodule Butler.Jobs.Worker do
   defp run_cli(job, run_opts, %{writer: writer, stop_timeout: stop_timeout}, before_run) do
     case Writer.stop(writer, stop_timeout) do
       :ok ->
-        before_run.()
-        Runner.CLI.run(job, run_opts)
+        case before_run.() do
+          :ok ->
+            Runner.CLI.run(job, run_opts)
+
+          {:error, reason} ->
+            # Proxy processes may still be alive: never start the CLI.
+            {:lock_refused, "MCP proxy could not be suspended: #{inspect(reason)}"}
+        end
 
       {:error, reason} ->
         # The writer may still hold the palace lock: never start the CLI. The
@@ -343,8 +366,10 @@ defmodule Butler.Jobs.Worker do
   # Idempotent: the run does it in an `after`, this covers a crashed run.
   defp leave_maintenance(%Job{kind: kind}) do
     if Kinds.maintenance?(kind) do
-      Maintenance.leave()
+      # Resume first: while the gate is still closed, a request that slips in
+      # gets the maintenance error rather than a suspended backend.
       MCP.resume()
+      Maintenance.leave()
     end
 
     :ok

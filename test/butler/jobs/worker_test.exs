@@ -29,10 +29,19 @@ defmodule Butler.Jobs.WorkerTest do
 
   defp start_worker(q, opts \\ []) do
     name = :"worker_#{System.unique_integer([:positive])}"
+    parent = self()
 
+    # Never signal a real PID (the fake CLI reports 4242): record instead.
     opts =
       Keyword.merge(
-        [name: name, queue: q, palace: @palace, grace_ms: 50, legacy_running?: fn -> false end],
+        [
+          name: name,
+          queue: q,
+          palace: @palace,
+          grace_ms: 50,
+          legacy_running?: fn -> false end,
+          signal: fn pid, signal -> send(parent, {:signal, pid, signal}) end
+        ],
         opts
       )
 
@@ -744,7 +753,20 @@ defmodule Butler.Jobs.WorkerTest do
 
       # the real shutdown path: terminate/2 runs the cleanup
       stop_supervised!(Worker)
+      assert_receive {:signal, 4242, "TERM"}
       assert_proxy_resumed(session)
+    end
+
+    test "a worker booting after a hard kill clears a stale gate and resumes the proxy", %{q: q} do
+      Maintenance.enter("stale")
+      :ok = MCP.suspend()
+      assert Maintenance.active?()
+
+      start_worker(q)
+
+      refute Maintenance.active?()
+      await_proxy_ready()
+      assert Enum.all?(MCP.status(), &(&1.status == :ready))
     end
 
     test "the drain gives up after its timeout and the run goes on", %{q: q} do
