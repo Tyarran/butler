@@ -124,6 +124,21 @@ defmodule Butler.Jobs.WorkerTest do
       assert_receive {:worker_changed, :idle}
     end
 
+    test "an on_start with a nil os_pid (instant exit) does not crash the queue", %{q: q} do
+      queue_pid = Process.whereis(q)
+
+      stub(Butler.CLIMock, :run, fn _argv, opts ->
+        opts[:on_start].(nil)
+        ok_result()
+      end)
+
+      job = mine(q, "instant")
+      start_worker(q)
+
+      await_state(job.id, :succeeded)
+      assert Process.whereis(q) == queue_pid
+    end
+
     test "broadcasts output lines on the job topic", %{q: q} do
       Phoenix.PubSub.subscribe(Butler.PubSub, "butler:job:job-out")
 

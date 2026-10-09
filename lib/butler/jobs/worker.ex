@@ -156,6 +156,9 @@ defmodule Butler.Jobs.Worker do
   def handle_info(:recheck_legacy, %{status: :blocked} = state),
     do: {:noreply, state |> check_legacy() |> maybe_claim()}
 
+  # A process that already exited has no pid to record (`on_start.(nil)`).
+  def handle_info({:os_pid, id, nil}, %{job: %Job{id: id}} = state), do: {:noreply, state}
+
   def handle_info({:os_pid, id, os_pid}, %{job: %Job{id: id}} = state) do
     _ = Queue.set_os_pid(state.queue, id, os_pid)
     state = %{state | os_pid: os_pid}
@@ -167,13 +170,21 @@ defmodule Butler.Jobs.Worker do
     {:noreply, state}
   end
 
+  def handle_info({:kill_pid, os_pid}, state) do
+    state.signal.(os_pid, "KILL")
+    {:noreply, state}
+  end
+
   def handle_info({ref, outcome}, %{task: %Task{ref: ref}} = state) do
     Process.demonitor(ref, [:flush])
     {:noreply, state |> settle(outcome) |> maybe_claim()}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{task: %Task{ref: ref}} = state) do
+    # The port died with its owner, but the OS process may linger: TERM now,
+    # KILL after the grace period (the process may outlive the job).
     state.signal.(state.os_pid, "TERM")
+    schedule_kill(state)
     error = %{class: "RunnerCrashed", message: "runner crashed: #{inspect(reason)}"}
     {:noreply, state |> settle({:error, error}) |> maybe_claim()}
   end
@@ -270,7 +281,10 @@ defmodule Butler.Jobs.Worker do
   end
 
   defp settle(%{job: %Job{} = job} = state, outcome) do
-    _ = finalize(state, job, outcome)
+    case finalize(state, job, outcome) do
+      {:ok, _job} -> :ok
+      other -> Logger.warning("could not settle job #{job.id}: #{inspect(other)}")
+    end
 
     state
     |> then(&%{&1 | job: nil, task: nil, os_pid: nil, cancelling?: false})
@@ -334,6 +348,11 @@ defmodule Butler.Jobs.Worker do
     Process.send_after(self(), {:kill_grace, id}, state.grace_ms)
     state
   end
+
+  defp schedule_kill(%{os_pid: nil}), do: :ok
+
+  defp schedule_kill(%{os_pid: os_pid} = state),
+    do: Process.send_after(self(), {:kill_pid, os_pid}, state.grace_ms)
 
   # Shutdown: TERM, wait for the task to end, KILL when it does not.
   defp stop_child(%{os_pid: nil}), do: :ok
