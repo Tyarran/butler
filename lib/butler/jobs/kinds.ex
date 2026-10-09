@@ -33,6 +33,7 @@ defmodule Butler.Jobs.Kinds do
   @api_kinds ~w(mine sweep sync diary_write mcp_tool)
   @idempotent_kinds ~w(mine sweep sync)
   @maintenance_kinds ~w(repair compress migrate-wings)
+  @sensitive_kinds ~w(diary_write mcp_tool)
 
   @default_timeouts_ms %{
     "mine" => 6 * 3_600_000,
@@ -101,6 +102,13 @@ defmodule Butler.Jobs.Kinds do
   @doc "Whether jobs of `kind` gate the MCP proxy while they run."
   @spec maintenance?(term()) :: boolean()
   def maintenance?(kind), do: kind in @maintenance_kinds
+
+  @doc """
+  Whether the payload of jobs of `kind` is verbatim user content (`diary_write`,
+  `mcp_tool`): the dashboard never shows it.
+  """
+  @spec sensitive_payload?(term()) :: boolean()
+  def sensitive_payload?(kind), do: kind in @sensitive_kinds
 
   @doc "Whether jobs of `kind` can be re-run safely."
   @spec idempotent?(String.t()) :: boolean()

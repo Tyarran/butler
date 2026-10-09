@@ -12,8 +12,7 @@ config :butler,
   # Butler's own job engine (queue + serial worker). Always on; only the
   # test environment turns it off, because tests start their own engine in a
   # throwaway state dir.
-  start_jobs: true,
-  start_watcher: true
+  start_jobs: true
 
 # Configure the endpoint
 config :butler, ButlerWeb.Endpoint,

@@ -3,148 +3,187 @@ defmodule ButlerWeb.JobsLiveTest do
 
   import Phoenix.LiveViewTest
 
-  alias Butler.Jobs.Watcher
-  alias Butler.Test.DaemonFixture
-  alias Butler.Test.QueueFixture
+  alias Butler.Jobs.Queue
+  alias Butler.Test.Engine
 
-  setup do
-    {:ok, fixture: DaemonFixture.install!(running: true)}
-  end
+  @moduletag :tmp_dir
 
-  defp finished!(queue, id, kind, seconds, ago \\ 3_000) do
-    started = QueueFixture.iso_ago(ago)
-
-    finished =
-      DateTime.utc_now()
-      |> DateTime.add(-ago + seconds, :second)
-      |> DateTime.to_iso8601()
-      |> String.replace("Z", "+00:00")
-
-    QueueFixture.insert_job!(queue,
-      id: id,
-      kind: kind,
-      state: "succeeded",
-      created_at: started,
-      started_at: started,
-      finished_at: finished
-    )
+  setup %{tmp_dir: tmp} do
+    Engine.start_queue!(tmp)
+    :ok
   end
 
   test "shows an empty state when there are no jobs", %{conn: conn} do
-    {:ok, view, html} = live(conn, ~p"/jobs")
+    {:ok, view, _html} = live(conn, ~p"/jobs")
 
-    assert html =~ "No jobs yet"
-    assert html =~ "No active jobs"
-    refute has_element?(view, "#active-jobs tr[id]")
+    assert has_element?(view, "#jobs-empty")
+    refute has_element?(view, "#jobs tr[id^=job-]")
   end
 
-  test "shows an empty state without any queue database", %{conn: conn} do
-    DaemonFixture.install!(queue: false)
+  test "lists the jobs of the queue with their actions", %{conn: conn} do
+    running = Engine.job!("mine", state: :running, payload: %{"source" => "/synthetic/p"})
+    queued = Engine.job!("sweep", payload: %{"target" => "/synthetic/t"})
+    failed = Engine.job!("mine", state: :failed, error: %{"class" => "CommandFailed"})
+    done = Engine.job!("mine", state: :succeeded)
+
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    for job <- [running, queued, failed, done], do: assert(has_element?(view, "#job-#{job.id}"))
+    assert has_element?(view, "#cancel-#{running.id}")
+    assert has_element?(view, "#cancel-#{queued.id}")
+    assert has_element?(view, "#retry-#{failed.id}")
+    refute has_element?(view, "#retry-#{done.id}")
+    refute has_element?(view, "#cancel-#{done.id}")
+  end
+
+  test "a new job appears live, and its state change updates the row", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    job = Engine.job!("sweep", payload: %{"target" => "/synthetic/t"})
+    assert has_element?(view, "#job-#{job.id} [data-state=queued]")
+
+    {:ok, _} = Queue.cancel(Queue, job.id)
+    assert has_element?(view, "#job-#{job.id} [data-state=cancelled]")
+    assert has_element?(view, "#retry-#{job.id}")
+  end
+
+  test "cancelling a queued job", %{conn: conn} do
+    job = Engine.job!("sweep", payload: %{"target" => "/synthetic/t"})
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    # The worker is not running in this test: cancelling a queued job goes
+    # through the worker and reports it as unavailable.
+    html = view |> element("#cancel-#{job.id}") |> render_click()
+    assert html =~ "Could not cancel"
+  end
+
+  test "cancelling with a running worker", %{conn: conn} do
+    Engine.start_worker!()
+    job = Engine.job!("sweep", payload: %{"target" => "/synthetic/t"})
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    view |> element("#cancel-#{job.id}") |> render_click()
+    assert has_element?(view, "#job-#{job.id} [data-state=cancelled]")
+  end
+
+  test "retrying an idempotent kind enqueues a new job at once", %{conn: conn} do
+    failed = Engine.job!("sweep", state: :failed, payload: %{"target" => "/synthetic/t"})
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    view |> element("#retry-#{failed.id}") |> render_click()
+    refute has_element?(view, "#retry-dialog")
+
+    {:ok, jobs} = Queue.list(Queue, state: :queued)
+    assert [%{kind: "sweep", payload: %{"target" => "/synthetic/t"}} = new] = jobs
+    assert has_element?(view, "#job-#{new.id}")
+  end
+
+  test "retrying a non-idempotent kind needs a confirmation", %{conn: conn} do
+    failed =
+      Engine.job!("diary_write",
+        state: :failed,
+        payload: %{"agent_name" => "synthetic-agent", "entry" => "synthetic entry"}
+      )
+
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    view |> element("#retry-#{failed.id}") |> render_click()
+    assert has_element?(view, "#retry-dialog")
+    assert {:ok, []} = Queue.list(Queue, state: :queued)
+
+    view |> element("#retry-cancel") |> render_click()
+    refute has_element?(view, "#retry-dialog")
+    assert {:ok, []} = Queue.list(Queue, state: :queued)
+
+    view |> element("#retry-#{failed.id}") |> render_click()
+    view |> element("#retry-confirm") |> render_click()
+    assert {:ok, [%{kind: "diary_write"}]} = Queue.list(Queue, state: :queued)
+  end
+
+  test "never shows the payload of a diary_write or mcp_tool job", %{conn: conn} do
+    Engine.job!("diary_write",
+      payload: %{"agent_name" => "synthetic-agent", "entry" => "SECRET-SYNTHETIC-ENTRY"}
+    )
+
+    Engine.job!("mcp_tool",
+      payload: %{"name" => "mempalace_kg_add", "arguments" => %{"note" => "SECRET-ARG"}}
+    )
+
     {:ok, _view, html} = live(conn, ~p"/jobs")
-    assert html =~ "No queue database"
+    refute html =~ "SECRET-SYNTHETIC-ENTRY"
+    refute html =~ "SECRET-ARG"
+    refute html =~ "mempalace_kg_add"
   end
 
-  test "lists active jobs in their own section above the history", %{conn: conn, fixture: f} do
-    QueueFixture.insert_job!(f.queue,
-      id: "run-1",
-      state: "running",
-      started_at: QueueFixture.iso_ago(125)
-    )
-
-    QueueFixture.insert_job!(f.queue, id: "que-1", state: "queued")
-    finished!(f.queue, "done-1", "mine", 90)
-
-    {:ok, view, html} = live(conn, ~p"/jobs")
-
-    assert has_element?(view, "#active-jobs #job-run-1")
-    assert has_element?(view, "#active-jobs #job-que-1")
-    refute has_element?(view, "#active-jobs #job-done-1")
-    assert has_element?(view, "#job-history #job-done-1")
-
-    {active_at, _} = :binary.match(html, "active-jobs")
-    {history_at, _} = :binary.match(html, "job-history")
-    assert active_at < history_at
-  end
-
-  test "shows state badges, kind and duration", %{conn: conn, fixture: f} do
-    finished!(f.queue, "done-1", "mine", 330)
-    QueueFixture.insert_job!(f.queue, id: "bad-1", state: "failed", kind: "mcp_tool")
-
-    {:ok, view, _html} = live(conn, ~p"/jobs")
-
-    row = view |> element("#job-done-1") |> render()
-    assert row =~ "succeeded"
-    assert row =~ "mine"
-    assert row =~ "5m 30s"
-
-    assert view |> element("#job-bad-1") |> render() =~ "failed"
-  end
-
-  test "shows the source of a mine job and only the tool name of an mcp_tool job", %{
-    conn: conn,
-    fixture: f
-  } do
-    QueueFixture.insert_job!(f.queue,
-      id: "m1",
-      payload_json: %{"source" => "/tmp/synthetic/project", "mode" => "projects"}
-    )
-
-    QueueFixture.insert_job!(f.queue,
-      id: "t1",
-      kind: "mcp_tool",
-      payload_json: %{
-        "name" => "mempalace_search",
-        "arguments" => %{"query" => "SYNTHETIC-SECRET-ARG"}
+  describe "filters" do
+    setup do
+      %{
+        mine: Engine.job!("mine", state: :succeeded, payload: %{"source" => "/synthetic/a"}),
+        sweep: Engine.job!("sweep", state: :failed),
+        queued: Engine.job!("mine", payload: %{"source" => "/synthetic/b"})
       }
-    )
+    end
 
-    {:ok, view, html} = live(conn, ~p"/jobs")
+    test "without filters, shows every job", %{conn: conn} = jobs do
+      {:ok, view, _html} = live(conn, ~p"/jobs")
 
-    assert view |> element("#job-m1") |> render() =~ "/tmp/synthetic/project"
-    assert view |> element("#job-t1") |> render() =~ "mempalace_search"
-    refute html =~ "SYNTHETIC-SECRET-ARG"
-  end
+      for job <- [jobs.mine, jobs.sweep, jobs.queued],
+          do: assert(has_element?(view, "#job-#{job.id}"))
+    end
 
-  test "shows the typical duration hint for a running job", %{conn: conn, fixture: f} do
-    for {id, secs} <- [{"h1", 240}, {"h2", 300}, {"h3", 360}],
-        do: finished!(f.queue, id, "mine", secs)
+    test "filters by state from the query string", %{conn: conn} = jobs do
+      {:ok, view, _html} = live(conn, ~p"/jobs?state=failed")
+      assert has_element?(view, "#job-#{jobs.sweep.id}")
+      refute has_element?(view, "#job-#{jobs.mine.id}")
+      refute has_element?(view, "#job-#{jobs.queued.id}")
+      assert has_element?(view, "#filter-state-failed.btn-active")
+    end
 
-    QueueFixture.insert_job!(f.queue,
-      id: "run-1",
-      state: "running",
-      started_at: QueueFixture.iso_ago(125)
-    )
+    test "filters by kind and combines both filters", %{conn: conn} = jobs do
+      {:ok, view, _html} = live(conn, ~p"/jobs?kind=mine")
+      assert has_element?(view, "#job-#{jobs.mine.id}")
+      assert has_element?(view, "#job-#{jobs.queued.id}")
+      refute has_element?(view, "#job-#{jobs.sweep.id}")
 
-    {:ok, view, _html} = live(conn, ~p"/jobs")
+      {:ok, view, _html} = live(conn, ~p"/jobs?kind=mine&state=queued")
+      assert has_element?(view, "#job-#{jobs.queued.id}")
+      refute has_element?(view, "#job-#{jobs.mine.id}")
+    end
 
-    assert view |> element("#job-run-1") |> render() =~ "running for 2 min, usual duration ~5 min"
-  end
+    test "ignores unknown states and kinds", %{conn: conn} = jobs do
+      {:ok, view, _html} = live(conn, ~p"/jobs?state=bogus&kind=nope")
+      assert has_element?(view, "#job-#{jobs.mine.id}")
+      assert has_element?(view, "#filter-state-all.btn-active")
+      assert has_element?(view, "#filter-kind-all.btn-active")
+    end
 
-  test "shows no hint without enough history", %{conn: conn, fixture: f} do
-    QueueFixture.insert_job!(f.queue,
-      id: "run-1",
-      state: "running",
-      started_at: QueueFixture.iso_ago(125)
-    )
+    test "clicking filters patches the URL and keeps the other filter", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/jobs")
+      view |> element("#filter-state-queued") |> render_click()
+      assert_patch(view, ~p"/jobs?state=queued")
+      view |> element("#filter-kind-mine") |> render_click()
+      assert_patch(view, ~p"/jobs?kind=mine&state=queued")
+      view |> element("#filter-state-all") |> render_click()
+      assert_patch(view, ~p"/jobs?kind=mine")
+    end
 
-    {:ok, view, _html} = live(conn, ~p"/jobs")
+    test "live events respect the filters", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/jobs?state=queued")
+      other = Engine.job!("sweep", state: :succeeded)
+      queued = Engine.job!("sweep")
 
-    refute view |> element("#job-run-1") |> render() =~ "usual duration"
-  end
+      assert has_element?(view, "#job-#{queued.id}")
+      refute has_element?(view, "#job-#{other.id}")
 
-  test "updates when the watcher broadcasts a change", %{conn: conn, fixture: f} do
-    {:ok, view, _html} = live(conn, ~p"/jobs")
-    refute has_element?(view, "#job-new-1")
+      {:ok, _} = Queue.cancel(Queue, queued.id)
+      refute has_element?(view, "#job-#{queued.id}")
+    end
 
-    QueueFixture.insert_job!(f.queue, id: "new-1", state: "queued")
-    Phoenix.PubSub.broadcast(Butler.PubSub, Watcher.topic(), {:queue_changed, :ignored})
-
-    assert render(view) =~ "new-1"
-    assert has_element?(view, "#active-jobs #job-new-1")
-  end
-
-  test "the nav entry is active", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/jobs")
-    assert has_element?(view, ~s(a[aria-current="page"]), "Jobs")
+    test "lists the kinds present in the queue", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/jobs")
+      assert has_element?(view, "#filter-kind-mine")
+      assert has_element?(view, "#filter-kind-sweep")
+      refute has_element?(view, "#filter-kind-compress")
+    end
   end
 end

@@ -35,6 +35,45 @@ defmodule Butler.Test.Engine do
   end
 
   @doc """
+  Inserts a synthetic job in the given `:state` (default `:queued`).
+
+  Options: `:payload`, `:result`, `:error`, `:priority`, `:dedupe_key`.
+  Non-queued jobs are really claimed (and finished) through the queue, so they
+  carry the genuine timestamps and broadcast their events.
+  """
+  @spec job!(String.t(), keyword()) :: Butler.Jobs.Job.t()
+  def job!(kind, opts \\ []) do
+    attrs = %{
+      kind: kind,
+      payload: Keyword.get(opts, :payload, %{}),
+      priority: Keyword.get(opts, :priority, 0),
+      dedupe_key: Keyword.get(opts, :dedupe_key)
+    }
+
+    {:ok, job, :created} = Queue.enqueue(Queue, attrs)
+
+    case Keyword.get(opts, :state, :queued) do
+      :queued -> job
+      state -> advance!(job, state, opts)
+    end
+  end
+
+  defp advance!(job, state, opts) do
+    {:ok, queued} = Queue.list(Queue, state: :queued, limit: 1_000)
+    others = for other <- queued, other.id != job.id, do: other.id
+    {:ok, %{id: id} = running} = Queue.claim_next(Queue, others)
+    true = id == job.id
+
+    if state == :running do
+      running
+    else
+      outcome = %{result: Keyword.get(opts, :result), error: Keyword.get(opts, :error)}
+      {:ok, finished} = Queue.finish(Queue, id, state, outcome)
+      finished
+    end
+  end
+
+  @doc """
   Starts the worker. By default the legacy guard says the Python daemon is
   alive, so the worker stays `:blocked` and never claims (nor runs) a job;
   pass `legacy_running?: fn -> false end` and a CLI mock to let it work.

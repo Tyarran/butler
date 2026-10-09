@@ -18,7 +18,6 @@ defmodule Butler.Application do
         Butler.Commands.Direct
       ] ++
         [Butler.Maintenance, Butler.MCP.Writer] ++
-        watcher_children() ++
         mcp_children() ++
         jobs_children() ++
         [
@@ -30,10 +29,6 @@ defmodule Butler.Application do
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Butler.Supervisor]
     Supervisor.start_link(children, opts)
-  end
-
-  defp watcher_children do
-    if Application.get_env(:butler, :start_watcher, true), do: [Butler.Jobs.Watcher], else: []
   end
 
   # The job engine (queue + worker) starts after the MCP proxy it gates.

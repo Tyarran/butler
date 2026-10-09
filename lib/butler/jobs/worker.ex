@@ -81,6 +81,10 @@ defmodule Butler.Jobs.Worker do
   @spec subscribe() :: :ok | {:error, term()}
   def subscribe, do: Phoenix.PubSub.subscribe(Butler.PubSub, @topic)
 
+  @doc "PubSub topic of the `{:job_output, id, line}` messages of job `id`."
+  @spec job_topic(String.t()) :: String.t()
+  def job_topic(id), do: "butler:job:" <> id
+
   @doc "Tells an idle worker to look for a claimable job."
   @spec wake(GenServer.server()) :: :ok
   def wake(server \\ __MODULE__), do: GenServer.cast(server, :wake)
@@ -288,7 +292,7 @@ defmodule Butler.Jobs.Worker do
         timeout_ms: Kinds.timeout_ms(job.kind, state.timeouts),
         on_start: fn os_pid -> send(worker, {:os_pid, id, os_pid}) end,
         on_output: fn line ->
-          Phoenix.PubSub.broadcast(Butler.PubSub, "butler:job:" <> id, {:job_output, id, line})
+          Phoenix.PubSub.broadcast(Butler.PubSub, job_topic(id), {:job_output, id, line})
         end
       ] ++ if(state.palace, do: [palace: state.palace], else: [])
 
