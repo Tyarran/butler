@@ -286,7 +286,9 @@ defmodule Butler.Jobs.Store do
 
     sql = """
     INSERT INTO jobs (id, kind, payload_json, state, priority, dedupe_key, created_at)
-    VALUES (?, ?, ?, 'queued', ?, ?, ?) ON CONFLICT DO NOTHING
+    VALUES (?, ?, ?, 'queued', ?, ?, ?)
+    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL AND state IN ('queued', 'running')
+    DO NOTHING
     """
 
     with {:ok, payload} <- Jason.encode(Map.get(attrs, :payload, %{})),

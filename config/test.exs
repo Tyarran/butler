@@ -26,6 +26,7 @@ config :phoenix,
 config :butler,
   cli: Butler.CLIMock,
   start_watcher: false,
+  start_queue: false,
   start_mcp: false,
   mcp: [
     backends: %{
