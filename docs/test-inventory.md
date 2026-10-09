@@ -19,7 +19,6 @@ in `test/test_helper.exs`, selected through `config :butler, :cli`, see `config/
 | --- | --- |
 | `test/test_helper.exs` | Defines `Butler.CLIMock` for the `Butler.CLI` behaviour and starts ExUnit. |
 | `test/support/queue_fixture.ex` | `Butler.Test.QueueFixture`: builds synthetic `queue.sqlite3` files (WAL) with the **exact Python daemon schema** (`jobs` table: `id, kind, payload_json, state, priority, dedupe_key, created_at, started_at, finished_at, result_json, error_json, attempts`; indexes `idx_jobs_state`, `idx_jobs_dedupe`, partial unique `idx_jobs_dedupe_active` on queued/running). `tmp_dir!/0` (auto-removed), `create!/1`, `insert_job!/2` (map or JSON-string columns, to test malformed JSON), `iso_ago/1` (`+00:00` timestamps like the daemon). Opened through Exqlite, **write-capable**: only used by tests. |
-| `test/support/daemon_fixture.ex` | `Butler.Test.DaemonFixture`: fake MemPalace home `<tmp>/daemon/<palace_key>/` with an empty queue and optional `endpoint.json` (`running: true` uses the test VM pid, `:stale` a dead pid, `queue: false`). Sets `:butler` env (`palace_path`, `mempalace_home`) and restores it on exit (so tests using it are `async: false`). Synthetic palace `/tmp/synthetic/palace`. Never writes a `token`. |
 | `test/support/fake_mcp.sh` | **Fake MCP stdio backend**: bash, line-delimited JSON-RPC, synthetic data. First arg = startup mode (`never_start`, `exit_on_start`, `exit_unless_file <path>`, default healthy); the request `method` selects behaviour (`crash`, `hang`, `slow` 0.4 s concurrent, `noisy` non-JSON line, `big` ~200 KB, else echoes `{pid, method}`; answers `initialize`, ignores `notifications/*`). Replaces the real `mempalace-mcp`/`mempalace-light-mcp` in all MCP tests. |
 | `test/support/conn_case.ex` | `ButlerWeb.ConnCase`: Phoenix `ConnTest`/`LiveViewTest` case template (no DB). |
 
@@ -34,11 +33,12 @@ in `test/test_helper.exs`, selected through `config :butler, :cli`, see `config/
 | `commands/guard_test.exs` | 10 | `Butler.Commands.Guard`: direct-command guard (refuse when a daemon job is active, uses queue + daemon fixtures). |
 | `commands/direct_test.exs` | 18 | `Butler.Commands.Direct`: orchestrates direct maintenance commands (Mox CLI, daemon stop/start flow). |
 | `commands/submit_test.exs` | 17 | `Butler.Commands.Submit`: job submission through the CLI (`--background`), result parsing (Mox + fixtures). |
-| `daemon/locator_test.exs` | 10 | `Butler.Daemon.Locator`: finds state dir via `endpoint.json`, latest `started_at`, fallback on `palace_key`, never reads `token`. |
+| `daemon/locator_test.exs` | 8 | `Butler.Daemon.Locator`: finds the daemon via `endpoint.json` only (latest `started_at`), a stopped daemon's leftover directory is not found, never reads `token`. |
+| `os_process_test.exs` | 3 | `Butler.OSProcess`: `port_env/1` always unsets `MEMPALACE_DAEMON_STATE_ROOT`; MCP backends carry the direct routing env; a spawned process does not inherit the daemon state root. |
 | `daemon/status_test.exs` | 6 | `Butler.Daemon.Status`: running/stopped/stale from endpoint + pid liveness + queue. |
 | `daemon/control_test.exs` | 11 | `Butler.Daemon.Control`: daemon start/stop through the CLI (Mox). |
 | `jobs/job_test.exs` | 12 | `Butler.Jobs.Job`: row to struct (states, JSON decoding, durations). |
-| `jobs/store_test.exs` | 18 | `Butler.Jobs.Store`: **read-only** access to `queue.sqlite3`, filters, history, malformed JSON. |
+| `jobs/store_test.exs` | 13 | `Butler.Jobs.Store` reads through a handle opened by `Store.open/1`: ordering, filters, limit, `get`, `kinds`, concurrent writer (WAL). |
 | `jobs/counts_test.exs` | 4 | `Butler.Jobs` per-state counters. |
 | `jobs/duration_hint_test.exs` | 9 | `Butler.Jobs.DurationHint`: median of >= 3 succeeded jobs of the same kind, running hint. |
 | `jobs/watcher_test.exs` | 5 | `Butler.Jobs.Watcher`: polling GenServer broadcasting `{:queue_changed, snapshot}` over PubSub. |
@@ -87,10 +87,10 @@ in `test/test_helper.exs`, selected through `config :butler, :cli`, see `config/
 
 | Module | Summary |
 | --- | --- |
-| `lib/butler/daemon/locator.ex` | `Butler.Daemon.Locator`: `find/2` scans `<root>/*/endpoint.json` for the wanted `palace_path` (only `endpoint.json` is read, never `token`), picks the latest `started_at`, else falls back to the directory named `palace_key/1` (first 24 hex of SHA-256 of the normalized path). Returns `%Locator{dir, queue_path, pid, palace_path, started_at, host, port}`. |
+| `lib/butler/daemon/locator.ex` | `Butler.Daemon.Locator`: `find/2` scans `<root>/*/endpoint.json` for the wanted `palace_path` (only `endpoint.json` is read, never `token` nor the daemon's queue) and picks the latest `started_at`. Returns `%Locator{dir, pid, palace_path, started_at, host, port}` or `{:error, :not_found}`. |
 | `lib/butler/jobs/duration_hint.ex` | `Butler.Jobs.DurationHint`: `typical_seconds/2` (median of succeeded jobs of a kind, `nil` below 3 samples), `hint/3` renders `"running for N min, usual duration ~M min"` for running jobs. Pure. |
 | `lib/butler/commands/input.ex` | `Butler.Commands.Input`: `mine/1`, `sweep/1`, `sync/1` validate string form params into `Args` maps, `{:ok, map} / {:error, %{field => message}}`. Paths absolute and existing, enums whitelisted, positive integers, text not starting with `-`/containing NUL. `sync` takes only `wing` and `roots` (no way to express `--apply`). No Ecto. |
 | `ButlerWeb.Layouts` (`lib/butler_web/components/layouts.ex`) | `app/1` shell (`flash`, `active`, `title` attrs) with a nav (`@nav_items`: Daemon, ... ; `nav_items/0`), `flash_group/1`, `theme_toggle/1`, embeds `layouts/*` (root template). All LiveViews wrap in `<Layouts.app flash={@flash} active={...} title=...>`. |
 | `ButlerWeb.JobLive` (`lib/butler_web/live/job_live.ex`) | Job detail page: mounts by `id`, subscribes to `Watcher` (`{:queue_changed, _}` reloads via `Store`), pretty-prints payload/error/result, renders `stdout` in a terminal block. Read-only. |
 | `ButlerWeb.PalaceLive` (`lib/butler_web/live/palace_live.ex`) | 27-line placeholder ("not part of v1"), assigns `page_title`, renders inside `Layouts.app active={:palace}`. |
-| `mix butler.demo` (`lib/mix/tasks/butler.demo.ex`) | `mix butler.demo [--dir DIR] [--port PORT] [--build-only]`: builds a synthetic home (`BUTLER_MEMPALACE_HOME` fixture dir, fake palace, queue with a job in every state via `Butler.Demo`) and starts the endpoint with `Butler.CLI.Demo` instead of the real CLI. Used by `mise run screenshots`. |
+| `mix butler.demo` (`lib/mix/tasks/butler.demo.ex`) | `mix butler.demo [--dir DIR] [--port PORT] [--build-only]`: builds a synthetic home (`BUTLER_MEMPALACE_HOME` fixture dir, fake palace, queue with queued and finished jobs, never a running one, via `Butler.Demo`) and starts the endpoint with `Butler.CLI.Demo` instead of the real CLI. Used by `mise run screenshots`. |

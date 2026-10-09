@@ -106,8 +106,11 @@ Butler.CLI / OSProcess / Palace / Token / Paths
 Application children: Telemetry, DNSCluster, PubSub, TaskSupervisor,
 `Maintenance`, `MCP.Writer`, `MCP.Supervisor` (if enabled), `Jobs.Supervisor`
 (rest_for_one: Queue then Worker, Worker shutdown 20_000), Endpoint. Dependencies
-only point downward. The engine stays dormant behind a temporary `:start_queue`
-flag until phase 7 so that no two writers run during development.
+only point downward. The engine starts with the application (`:start_jobs`,
+default `true`; `false` only in `config/test.exs`, where tests start their own
+engine in a tmp state dir). Until phase 7 it was dormant behind a temporary
+`:start_queue` flag so that no two writers ran during development; the worker
+now stays `blocked` while the Python daemon is alive instead.
 
 ### Data model
 
@@ -226,7 +229,9 @@ field?}}`: 400 `invalid_payload`, 401 `unauthorized`, 403 `forbidden` /
   Deviations: the `:start_queue` flag became `:start_jobs` (default `true`, `false`
   only in `config/test.exs`, because tests start their own engine in a tmp state
   dir); `Daemon.Status` was deleted too (`Legacy` keeps the PID liveness check
-  itself) while `Daemon.Locator` stays for `Legacy`; a `Butler.Jobs` facade is the
+  itself) while `Daemon.Locator` stays for `Legacy` (reduced in the cleanup pass to
+  the `endpoint.json` lookup: no `queue_path`, no `palace_key` fallback; likewise
+  the read-only by-path mode of `Jobs.Store` was removed: handles only); a `Butler.Jobs` facade is the
   dashboard's door to Queue/Worker; UI form submissions carry a `ui:<kind>:<hash>`
   `dedupe_key` (an identical active job is reported instead of queued twice);
   `Jobs.retry` does not dedupe; the legacy `--daemon --background` builders of

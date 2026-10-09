@@ -11,7 +11,7 @@ defmodule Butler.Daemon.LocatorTest do
     {:ok, root: QueueFixture.tmp_dir!()}
   end
 
-  defp daemon_dir!(root, id, endpoint, opts \\ []) do
+  defp daemon_dir!(root, id, endpoint) do
     dir = Path.join(root, id)
     File.mkdir_p!(dir)
     File.write!(Path.join(dir, "endpoint.json"), Jason.encode!(endpoint))
@@ -21,8 +21,6 @@ defmodule Butler.Daemon.LocatorTest do
     # Any attempt to read the token would fail loudly.
     File.chmod!(token, 0o000)
     ExUnit.Callbacks.on_exit(fn -> File.chmod(token, 0o600) end)
-
-    if opts[:queue], do: QueueFixture.create!(Path.join(dir, "queue.sqlite3"))
     dir
   end
 
@@ -45,7 +43,6 @@ defmodule Butler.Daemon.LocatorTest do
 
     assert {:ok, found} = Locator.find(root, @palace)
     assert found.dir == dir
-    assert found.queue_path == Path.join(dir, "queue.sqlite3")
     assert found.pid == 1234
     assert found.palace_path == @palace
     assert found.started_at == ~U[2026-01-01 10:00:00Z]
@@ -86,29 +83,11 @@ defmodule Butler.Daemon.LocatorTest do
     assert {:ok, %{dir: ^good}} = Locator.find(root, @palace)
   end
 
-  describe "stopped daemon (no endpoint.json)" do
-    # Computed with the daemon's own algorithm:
-    # sha256(abspath(realpath(palace)))[:24]
-    @key "487553a8cf2262446d9ed427"
+  test "a stopped daemon (directory left behind, no endpoint.json) is not found", %{root: root} do
+    queue = Path.join([root, "487553a8cf2262446d9ed427", "queue.sqlite3"])
+    QueueFixture.create!(queue)
 
-    test "palace_key/1 matches the daemon's directory naming" do
-      assert Locator.palace_key("/tmp/bthrow/palace") == @key
-    end
-
-    test "falls back to the directory named after the palace key", %{root: root} do
-      dir = Path.join(root, @key)
-      QueueFixture.create!(Path.join(dir, "queue.sqlite3"))
-
-      assert {:ok, found} = Locator.find(root, "/tmp/bthrow/palace")
-      assert found.dir == dir
-      assert found.queue_path == Path.join(dir, "queue.sqlite3")
-      assert found.pid == nil
-      assert found.started_at == nil
-    end
-
-    test "is not found when neither endpoint nor keyed directory exist", %{root: root} do
-      assert Locator.find(root, "/tmp/bthrow/palace") == {:error, :not_found}
-    end
+    assert Locator.find(root, "/tmp/bthrow/palace") == {:error, :not_found}
   end
 
   test "ignores a trailing slash difference in the palace path", %{root: root} do

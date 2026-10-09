@@ -1,18 +1,13 @@
 defmodule Butler.Jobs.Store do
   @moduledoc """
-  SQLite access to a job queue (`queue.sqlite3`), in two modes never mixed on
-  the same file:
+  SQLite access to Butler's **own** job queue (`queue.sqlite3` in the state
+  directory, see `Butler.Paths`), always through a handle returned by `open/1`
+  (then `enqueue/3`, `claim_next/2`, `list/2`, ...).
 
-    * **Read-only, by path** (`list/2`, `get/2`, `counts/1`, `kinds/1` given a
-      path): opens with `SQLITE_OPEN_READONLY` plus `PRAGMA query_only` and never
-      creates the file (`{:error, :not_found}`). Used to display the legacy
-      Python daemon queue until the cutover; Butler never writes to that file.
-    * **Read-write, by handle** (`open/1`, then `enqueue/3`, `claim_next/2`, ...):
-      Butler's **own** queue in its state directory (see `Butler.Paths`).
-      `open/1` creates the directory (mode 700) and the database (mode 600, WAL),
-      applies the schema and refuses a database whose `user_version` is newer
-      than known. The read functions accept such a handle too. The handle must
-      be owned by a single process (the `Queue` server, phase 2).
+  `open/1` creates the directory (mode 700) and the database (mode 600, WAL),
+  applies the schema and refuses a database whose `user_version` is newer than
+  known. The handle must be owned by a single process (the `Queue` server).
+  Butler never opens the Python daemon's queue.
 
   Timestamps written by Butler are UTC ISO-8601 with millisecond precision and a
   `Z` suffix, so they sort lexicographically.
@@ -24,7 +19,6 @@ defmodule Butler.Jobs.Store do
 
   @default_limit 200
   @max_limit 1_000
-  @busy_timeout_ms 2_000
   @states ~w(queued running succeeded failed cancelled)a
   @active_sql "state IN ('queued', 'running')"
   @user_version 1
@@ -57,7 +51,6 @@ defmodule Butler.Jobs.Store do
 
   @type db_path :: Path.t()
   @type db :: Sqlite3.db()
-  @type target :: db_path() | db()
   @type list_opt ::
           {:state, Job.state() | nil} | {:kind, String.t() | nil} | {:limit, pos_integer()}
 
@@ -67,8 +60,8 @@ defmodule Butler.Jobs.Store do
   Options: `:state` (one of the known states), `:kind` and `:limit`
   (default #{@default_limit}, capped at #{@max_limit}).
   """
-  @spec list(target(), [list_opt()]) :: {:ok, [Job.t()]} | {:error, term()}
-  def list(path, opts \\ []) do
+  @spec list(db(), [list_opt()]) :: {:ok, [Job.t()]} | {:error, term()}
+  def list(db, opts \\ []) do
     state = opts[:state]
     kind = opts[:kind]
     limit = opts |> Keyword.get(:limit, @default_limit) |> clamp_limit()
@@ -79,17 +72,16 @@ defmodule Butler.Jobs.Store do
       sql =
         "SELECT * FROM jobs#{where} ORDER BY (#{@active_sql}) DESC, created_at DESC LIMIT ?"
 
-      query(path, sql, params ++ [limit])
+      query(db, sql, params ++ [limit])
     else
       {:error, :invalid_state}
     end
   end
 
   @doc "Fetches a job by id."
-  @spec get(target(), String.t()) ::
-          {:ok, Job.t()} | {:error, :not_found | :job_not_found | term()}
-  def get(path, id) do
-    case query(path, "SELECT * FROM jobs WHERE id = ? LIMIT 1", [id]) do
+  @spec get(db(), String.t()) :: {:ok, Job.t()} | {:error, :job_not_found | term()}
+  def get(db, id) do
+    case query(db, "SELECT * FROM jobs WHERE id = ? LIMIT 1", [id]) do
       {:ok, [job]} -> {:ok, job}
       {:ok, []} -> {:error, :job_not_found}
       {:error, _reason} = error -> error
@@ -100,37 +92,25 @@ defmodule Butler.Jobs.Store do
   Number of jobs per state. The result always has the five keys `:queued`, `:cancelled`,
   `:running`, `:succeeded` and `:failed`, defaulting to 0.
   """
-  @spec counts(target()) :: {:ok, %{Job.state() => non_neg_integer()}} | {:error, term()}
-  def counts(path) do
+  @spec counts(db()) :: {:ok, %{Job.state() => non_neg_integer()}} | {:error, term()}
+  def counts(db) do
     zero = Map.new(@states, &{&1, 0})
 
-    with {:ok, rows} <- rows(path, "SELECT state, COUNT(*) FROM jobs GROUP BY state") do
+    with {:ok, rows} <- rows(db, "SELECT state, COUNT(*) FROM jobs GROUP BY state") do
       {:ok, Enum.reduce(rows, zero, &add_count/2)}
     end
   end
 
   # Runs a parameterless read query and returns the raw rows.
-  defp rows(target, sql) do
-    read(target, fn db ->
-      with {:ok, stmt} <- Sqlite3.prepare(db, sql) do
-        try do
-          Sqlite3.fetch_all(db, stmt)
-        after
-          Sqlite3.release(db, stmt)
-        end
+  defp rows(db, sql) do
+    with {:ok, stmt} <- Sqlite3.prepare(db, sql) do
+      try do
+        Sqlite3.fetch_all(db, stmt)
+      after
+        Sqlite3.release(db, stmt)
       end
-    end)
-  end
-
-  # Runs `fun` on a read-only connection (path) or on the given handle.
-  defp read(path, fun) when is_binary(path) do
-    case with_connection(path, fun) do
-      {:ok, inner} -> inner
-      {:error, _reason} = error -> error
     end
   end
-
-  defp read(db, fun), do: fun.(db)
 
   defp add_count([state, count], acc) do
     case Enum.find(@states, &(Atom.to_string(&1) == state)) do
@@ -140,52 +120,17 @@ defmodule Butler.Jobs.Store do
   end
 
   @doc "Distinct job kinds present in the queue, sorted."
-  @spec kinds(target()) :: {:ok, [String.t()]} | {:error, term()}
-  def kinds(path) do
-    with {:ok, rows} <- rows(path, "SELECT DISTINCT kind FROM jobs ORDER BY kind") do
+  @spec kinds(db()) :: {:ok, [String.t()]} | {:error, term()}
+  def kinds(db) do
+    with {:ok, rows} <- rows(db, "SELECT DISTINCT kind FROM jobs ORDER BY kind") do
       {:ok, List.flatten(rows)}
     end
   end
 
-  @doc """
-  Runs `fun` with a read-only connection to the queue database.
-
-  Returns `{:ok, fun_result}`, or `{:error, :not_found}` when the file does
-  not exist, or `{:error, reason}` when it cannot be opened.
-  """
-  @spec with_connection(db_path(), (Sqlite3.db() -> result)) :: {:ok, result} | {:error, term()}
-        when result: term()
-  def with_connection(path, fun) do
-    if File.regular?(path) do
-      open_and_run(path, fun)
-    else
-      {:error, :not_found}
+  defp query(db, sql, params) do
+    with {:ok, columns, rows} <- select(db, sql, params) do
+      {:ok, Enum.map(rows, &to_job(columns, &1))}
     end
-  end
-
-  defp open_and_run(path, fun) do
-    case Sqlite3.open(path, mode: :readonly) do
-      {:ok, db} ->
-        try do
-          with :ok <- Sqlite3.set_busy_timeout(db, @busy_timeout_ms),
-               :ok <- Sqlite3.execute(db, "PRAGMA query_only = ON") do
-            {:ok, fun.(db)}
-          end
-        after
-          Sqlite3.close(db)
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp query(target, sql, params) do
-    read(target, fn db ->
-      with {:ok, columns, rows} <- select(db, sql, params) do
-        {:ok, Enum.map(rows, &to_job(columns, &1))}
-      end
-    end)
   end
 
   # Prepares, binds and fully fetches a statement.
