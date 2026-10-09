@@ -17,7 +17,11 @@ queue answers `503 queue_unavailable`.
   (`Plugs.APIAuth`) -> `401 unauthorized` (with `WWW-Authenticate: Bearer`).
   The token is Butler's own: `<state dir>/token` (mode 600, default
   `~/.local/state/butler/token`, `BUTLER_STATE_DIR`). Never the Python daemon's.
-- Request bodies are capped at 1 000 000 bytes -> `413 too_large`.
+- The loopback and token checks run in the endpoint **before** `Plug.Parsers`
+  (`Plugs.PreParserGate`), so an unauthenticated or non-loopback caller gets
+  `403`/`401` without Butler reading or parsing its body.
+- Request bodies are capped at 1 000 000 bytes -> `413 too_large` (only for
+  authenticated callers).
 
 ## Errors
 

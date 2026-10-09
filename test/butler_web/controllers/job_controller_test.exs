@@ -73,6 +73,32 @@ defmodule ButlerWeb.JobControllerTest do
     end
   end
 
+  describe "access checks run before body parsing" do
+    test "an oversized body without a token is a 401, not parsed (no 413)", %{conn: conn} do
+      body =
+        Jason.encode!(%{kind: "diary_write", payload: %{entry: String.duplicate("a", 1_100_000)}})
+
+      conn = conn |> delete_req_header("authorization") |> raw(body)
+
+      assert %{"code" => "unauthorized"} = error_of(conn, 401)
+    end
+
+    test "an oversized body from a foreign host is a 403, not parsed", %{conn: conn} do
+      body =
+        Jason.encode!(%{kind: "diary_write", payload: %{entry: String.duplicate("a", 1_100_000)}})
+
+      conn = raw(%{conn | host: "evil.example"}, body)
+
+      assert %{"code" => "forbidden"} = error_of(conn, 403)
+    end
+
+    test "malformed JSON without a token is a 401, not a 400", %{conn: conn} do
+      conn = conn |> delete_req_header("authorization") |> raw("{not json")
+
+      assert %{"code" => "unauthorized"} = error_of(conn, 401)
+    end
+  end
+
   describe "body parser errors" do
     test "an oversized body is a JSON 413 whatever the Accept header", %{conn: conn} do
       body =

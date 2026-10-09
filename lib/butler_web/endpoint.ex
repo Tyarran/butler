@@ -42,6 +42,9 @@ defmodule ButlerWeb.Endpoint do
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
+  # Loopback + token checks of /api and /mcp before any body is parsed.
+  plug ButlerWeb.Plugs.PreParserGate
+
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
