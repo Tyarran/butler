@@ -1,47 +1,20 @@
 defmodule Butler.Demo do
   @moduledoc """
-  Builds a demo MemPalace home filled with **synthetic** data, to try or
-  screenshot Butler without a real palace (see `mix butler.demo`).
+  Builds a demo Butler state directory filled with **synthetic** data, to try
+  or screenshot Butler without a real palace (see `mix butler.demo`).
 
   The demo has a fake palace (`/demo/palace`, which never exists on disk) and
-  a queue database with the exact daemon schema, jobs in every state, and an
-  `endpoint.json` pointing to the current VM so that the daemon looks
-  *running*.
+  a queue database in Butler's own schema (created by
+  `Butler.Jobs.Store.open/1`, so with the right file modes) holding jobs in
+  every state. The demo home has no Python daemon, so the worker is not
+  blocked; the CLI is `Butler.CLI.Demo`, which runs nothing.
   """
 
-  alias Butler.Daemon.Locator
+  alias Butler.Jobs.Store
   alias Exqlite.Sqlite3
 
   @palace "/demo/palace"
-  @queue_file "queue.sqlite3"
-  @endpoint_file "endpoint.json"
-
-  # Mirrors the daemon queue schema (see test/support/queue_fixture.ex, and the
-  # demo test which checks both are identical).
-  @schema [
-    """
-    CREATE TABLE jobs (
-      id TEXT PRIMARY KEY,
-      kind TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      state TEXT NOT NULL,
-      priority INTEGER NOT NULL DEFAULT 0,
-      dedupe_key TEXT,
-      created_at TEXT NOT NULL,
-      started_at TEXT,
-      finished_at TEXT,
-      result_json TEXT,
-      error_json TEXT,
-      attempts INTEGER NOT NULL DEFAULT 0
-    )
-    """,
-    "CREATE INDEX idx_jobs_state ON jobs(state, priority)",
-    "CREATE INDEX idx_jobs_dedupe ON jobs(dedupe_key, state)",
-    """
-    CREATE UNIQUE INDEX idx_jobs_dedupe_active ON jobs(dedupe_key)
-    WHERE state IN ('queued', 'running')
-    """
-  ]
+  @state_subdir "state"
 
   @columns ~w(id kind payload_json state priority dedupe_key created_at started_at
               finished_at result_json error_json attempts)a
@@ -51,7 +24,7 @@ defmodule Butler.Demo do
   @mine_seconds [250, 310, 280, 330, 295, 270, 305, 320]
   @hour 3_600
 
-  @type t :: %{home: Path.t(), palace: Path.t(), queue: Path.t(), daemon_dir: Path.t()}
+  @type t :: %{home: Path.t(), palace: Path.t(), state_dir: Path.t(), queue: Path.t()}
 
   @doc "The fake palace path used by the demo."
   @spec palace() :: Path.t()
@@ -59,41 +32,18 @@ defmodule Butler.Demo do
 
   @doc """
   Builds the demo under `home` (any previous demo there is replaced) and
-  returns its paths.
+  returns its paths. The Butler state directory is `<home>/state`.
   """
   @spec build!(Path.t()) :: t()
   def build!(home) do
     home = Path.expand(home)
-    daemon_dir = Path.join([home, "daemon", Locator.palace_key(@palace)])
-    queue = Path.join(daemon_dir, @queue_file)
+    state_dir = Path.join(home, @state_subdir)
+    queue = Path.join(state_dir, "queue.sqlite3")
 
-    File.rm_rf!(Path.join(home, "daemon"))
-    File.mkdir_p!(daemon_dir)
+    File.rm_rf!(state_dir)
     create_queue!(queue, jobs(DateTime.utc_now()))
-    write_endpoint!(daemon_dir)
 
-    %{home: home, palace: @palace, queue: queue, daemon_dir: daemon_dir}
-  end
-
-  @doc "Writes the demo daemon's `endpoint.json` (the daemon looks running)."
-  @spec write_endpoint!(Path.t()) :: :ok
-  def write_endpoint!(daemon_dir) do
-    endpoint = %{
-      "host" => "127.0.0.1",
-      "port" => 7878,
-      "pid" => String.to_integer(System.pid()),
-      "palace_path" => @palace,
-      "started_at" => iso(DateTime.add(DateTime.utc_now(), -2 * @hour, :second))
-    }
-
-    File.write!(Path.join(daemon_dir, @endpoint_file), Jason.encode!(endpoint))
-  end
-
-  @doc "Removes the demo daemon's `endpoint.json` (the daemon looks stopped)."
-  @spec remove_endpoint!(Path.t()) :: :ok
-  def remove_endpoint!(daemon_dir) do
-    _ = File.rm(Path.join(daemon_dir, @endpoint_file))
-    :ok
+    %{home: home, palace: @palace, state_dir: state_dir, queue: queue}
   end
 
   # Jobs
@@ -113,14 +63,7 @@ defmodule Butler.Demo do
           started_at: started,
           finished_at: DateTime.add(started, seconds, :second),
           attempts: 1,
-          result: %{
-            "success" => true,
-            "kind" => "mine",
-            "mode" => "projects",
-            "dry_run" => false,
-            "exit_code" => 0,
-            "stdout" => mine_report(project)
-          }
+          result: %{"exit_status" => 0, "output_tail" => mine_report(project)}
         )
       end
 
@@ -137,7 +80,7 @@ defmodule Butler.Demo do
         job(21,
           kind: "sweep",
           state: "queued",
-          payload: %{"palace_path" => @palace, "target" => "/demo/transcripts"},
+          payload: %{"target" => "/demo/transcripts"},
           created_at: DateTime.add(now, -30, :second)
         ),
         job(22,
@@ -155,8 +98,10 @@ defmodule Butler.Demo do
           finished_at: DateTime.add(now, -3 * @hour + 3, :second),
           attempts: 1,
           error: %{
-            "error_class" => "FileNotFoundError",
-            "message" => "Source directory not found: /demo/projects/missing"
+            "class" => "CommandFailed",
+            "message" => "mempalace exited with status 1",
+            "exit_status" => 1,
+            "output_tail" => "Source directory not found: /demo/projects/missing\n"
           }
         ),
         job(24,
@@ -167,42 +112,31 @@ defmodule Butler.Demo do
           started_at: DateTime.add(now, -5 * @hour + 4, :second),
           finished_at: DateTime.add(now, -5 * @hour + 120, :second),
           attempts: 1,
-          error: %{"message" => "cancelled by daemon shutdown"}
+          error: %{"class" => "Cancelled", "message" => "cancelled from the dashboard"}
         ),
         job(25,
           kind: "sweep",
           state: "succeeded",
-          payload: %{"palace_path" => @palace, "target" => "/demo/transcripts"},
+          payload: %{"target" => "/demo/transcripts"},
           created_at: DateTime.add(now, -6 * @hour, :second),
           started_at: DateTime.add(now, -6 * @hour + 1, :second),
           finished_at: DateTime.add(now, -6 * @hour + 9, :second),
           attempts: 1,
           result: %{
-            "success" => true,
-            "kind" => "sweep",
-            "exit_code" => 0,
-            "stdout" => " Swept 3/3 files from /demo/transcripts: +12 new, 0 already present\n"
+            "exit_status" => 0,
+            "output_tail" =>
+              " Swept 3/3 files from /demo/transcripts: +12 new, 0 already present\n"
           }
         ),
         job(26,
           kind: "sync",
           state: "succeeded",
-          payload: %{
-            "dir" => nil,
-            "dry_run" => true,
-            "palace_path" => @palace,
-            "root" => [],
-            "wing" => nil
-          },
+          payload: %{"dry_run" => true},
           created_at: DateTime.add(now, -7 * @hour, :second),
           started_at: DateTime.add(now, -7 * @hour + 1, :second),
           finished_at: DateTime.add(now, -7 * @hour + 4, :second),
           attempts: 1,
-          result: %{
-            "success" => true,
-            "exit_code" => 0,
-            "stdout" => "\n  Dry run: nothing to delete.\n"
-          }
+          result: %{"exit_status" => 0, "output_tail" => "\n  Dry run: nothing to delete.\n"}
         )
       ] ++ tool_jobs(now)
   end
@@ -215,49 +149,32 @@ defmodule Butler.Demo do
         job(100 + n,
           kind: "mcp_tool",
           state: "succeeded",
-          payload: %{"name" => "demo_status", "arguments" => %{}, "palace_path" => @palace},
+          payload: %{"name" => "mempalace_kg_add", "arguments" => %{"demo" => n}},
           created_at: started,
           started_at: started,
           finished_at: DateTime.add(started, 2, :second),
           attempts: 1,
-          result: %{"success" => true}
+          result: %{"tool" => "mempalace_kg_add", "result" => %{"success" => true}}
         )
       end
 
     failed =
       job(110,
-        kind: "mcp_tool",
+        kind: "diary_write",
         state: "failed",
-        payload: %{
-          "name" => "demo_missing_tool",
-          "arguments" => %{"demo" => true},
-          "palace_path" => @palace
-        },
+        payload: %{"agent_name" => "demo-agent", "entry" => "Synthetic demo entry."},
         created_at: DateTime.add(now, -900, :second),
         started_at: DateTime.add(now, -899, :second),
         finished_at: DateTime.add(now, -898, :second),
         attempts: 1,
-        error: %{"error_class" => "TypeError", "message" => "Unknown tool: demo_missing_tool"}
+        error: %{"class" => "ToolFailed", "message" => "demo failure"}
       )
 
     ok ++ [failed]
   end
 
   defp mine_payload(project) do
-    %{
-      "agent" => "demo",
-      "dry_run" => false,
-      "extract" => "exchange",
-      "include_ignored" => [],
-      "limit" => 0,
-      "max_chunks_per_file" => nil,
-      "mode" => "projects",
-      "no_gitignore" => false,
-      "palace_path" => @palace,
-      "redetect_origin" => false,
-      "source" => "/demo/projects/#{project}",
-      "wing" => project
-    }
+    %{"source" => "/demo/projects/#{project}", "wing" => project, "mode" => "projects"}
   end
 
   defp mine_report(project) do
@@ -298,20 +215,18 @@ defmodule Butler.Demo do
     Map.merge(base, Map.new(attrs))
   end
 
-  # Deterministic 32-hex ids, like the daemon's uuid4 hex.
+  # Deterministic 32-hex ids.
   defp id(n), do: Base.encode16(:crypto.hash(:md5, "butler-demo-#{n}"), case: :lower)
 
   # Database
 
   defp create_queue!(path, jobs) do
-    {:ok, db} = Sqlite3.open(path, mode: [:readwrite, :create])
+    {:ok, db} = Store.open(path)
 
     try do
-      :ok = Sqlite3.execute(db, "PRAGMA journal_mode=WAL")
-      Enum.each(@schema, fn sql -> :ok = Sqlite3.execute(db, sql) end)
       Enum.each(jobs, &insert!(db, &1))
     after
-      Sqlite3.close(db)
+      Store.close(db)
     end
   end
 

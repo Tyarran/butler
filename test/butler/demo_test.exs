@@ -1,52 +1,30 @@
 defmodule Butler.DemoTest do
   use ExUnit.Case, async: false
 
+  import Bitwise
+
   alias Butler.CLI.Demo, as: DemoCLI
-  alias Butler.Daemon.Locator
-  alias Butler.Daemon.Status
   alias Butler.Demo
   alias Butler.Jobs.DurationHint
+  alias Butler.Jobs.Kinds
   alias Butler.Jobs.Store
-  alias Butler.Test.DaemonFixture
-  alias Butler.Test.QueueFixture
-  alias Exqlite.Sqlite3
 
-  setup do
-    dir = QueueFixture.tmp_dir!()
-    {:ok, demo: Demo.build!(dir), dir: dir}
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: tmp} do
+    {:ok, demo: Demo.build!(tmp)}
   end
 
-  defp schema(path) do
-    {:ok, db} = Sqlite3.open(path, mode: :readonly)
-
-    {:ok, stmt} =
-      Sqlite3.prepare(
-        db,
-        "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name"
-      )
-
-    {:ok, rows} = Sqlite3.fetch_all(db, stmt)
-    Sqlite3.release(db, stmt)
-    Sqlite3.close(db)
-    rows
+  test "builds Butler's own queue in a private state dir", %{demo: demo, tmp_dir: tmp} do
+    assert demo.state_dir == Path.join(tmp, "state")
+    assert demo.queue == Path.join(demo.state_dir, "queue.sqlite3")
+    assert band(File.stat!(demo.state_dir).mode, 0o777) == 0o700
+    assert band(File.stat!(demo.queue).mode, 0o777) == 0o600
   end
 
-  test "builds a queue with the exact daemon schema", %{demo: demo} do
-    reference = QueueFixture.create!(Path.join(QueueFixture.tmp_dir!(), "queue.sqlite3"))
-
-    normalize = fn rows ->
-      Enum.map(rows, fn [type, name, sql] -> [type, name, String.replace(sql, ~r/\s+/, " ")] end)
-    end
-
-    assert normalize.(schema(demo.queue)) == normalize.(schema(reference))
-  end
-
-  test "the demo palace is synthetic and the queue lives in the keyed daemon directory", %{
-    demo: demo,
-    dir: dir
-  } do
-    assert demo.palace == "/demo/palace"
-    assert Path.dirname(demo.queue) == Path.join([dir, "daemon", Locator.palace_key(demo.palace)])
+  test "the queue can be reopened by the engine (schema and version are Butler's)", %{demo: demo} do
+    assert {:ok, db} = Store.open(demo.queue)
+    Store.close(db)
   end
 
   test "contains jobs in every state, with a running one", %{demo: demo} do
@@ -57,24 +35,35 @@ defmodule Butler.DemoTest do
     end
   end
 
-  test "contains both job kinds and enough history for the duration hint", %{demo: demo} do
+  test "contains every kind shown in the dashboard and enough history for the hint", %{
+    demo: demo
+  } do
     {:ok, jobs} = Store.list(demo.queue, limit: 1_000)
     kinds = jobs |> Enum.map(& &1.kind) |> Enum.uniq() |> Enum.sort()
 
-    assert "mine" in kinds and "mcp_tool" in kinds
+    assert Enum.all?(~w(mine sweep sync mcp_tool diary_write), &(&1 in kinds))
 
     running = Enum.find(jobs, &(&1.state == :running))
     assert DurationHint.hint(running, jobs) =~ "usual duration"
   end
 
-  test "mine jobs carry a report and failed jobs an error", %{demo: demo} do
+  test "every payload is valid for the worker", %{demo: demo} do
+    {:ok, jobs} = Store.list(demo.queue, limit: 1_000)
+
+    for job <- jobs do
+      assert {:ok, _payload} = Kinds.validate_payload(job.kind, job.payload),
+             "invalid #{job.kind} payload: #{inspect(job.payload)}"
+    end
+  end
+
+  test "mine jobs carry an output tail and failed jobs an error", %{demo: demo} do
     {:ok, jobs} = Store.list(demo.queue, limit: 1_000)
 
     mine = Enum.find(jobs, &(&1.kind == "mine" and &1.state == :succeeded))
-    assert mine.result["stdout"] =~ "MemPalace Mine"
+    assert mine.result["output_tail"] =~ "MemPalace Mine"
     assert mine.payload["source"] =~ "/demo/"
 
-    failed = Enum.find(jobs, &(&1.state == :failed))
+    failed = Enum.find(jobs, &(&1.state == :failed and &1.kind == "mine"))
     assert is_map(failed.error) and is_binary(failed.error["message"])
   end
 
@@ -86,73 +75,35 @@ defmodule Butler.DemoTest do
     refute dump =~ "/home/"
   end
 
-  test "is deterministic apart from timestamps", %{dir: dir} do
-    other = Demo.build!(Path.join(dir, "second"))
-    {:ok, first} = Store.list(Demo.build!(Path.join(dir, "first")).queue, limit: 1_000)
-    {:ok, second} = Store.list(other.queue, limit: 1_000)
+  test "is deterministic apart from timestamps", %{tmp_dir: tmp} do
+    {:ok, first} = Store.list(Demo.build!(Path.join(tmp, "first")).queue, limit: 1_000)
+    {:ok, second} = Store.list(Demo.build!(Path.join(tmp, "second")).queue, limit: 1_000)
 
     assert Enum.map(first, & &1.id) == Enum.map(second, & &1.id)
   end
 
-  test "the daemon appears running with this VM's pid", %{demo: demo, dir: dir} do
-    status = Status.resolve(root: Path.join(dir, "daemon"), palace_path: demo.palace)
-
-    assert status.state == :running
-    assert status.pid == String.to_integer(System.pid())
-  end
-
   describe "Butler.CLI.Demo" do
-    setup %{demo: demo, dir: dir} do
-      DaemonFixture.put_env!(
-        palace_path: demo.palace,
-        mempalace_home: dir,
-        daemon_state_root: nil
-      )
-
-      :ok
+    setup do
+      Application.put_env(:butler, :demo_line_pause_ms, 0)
+      on_exit(fn -> Application.delete_env(:butler, :demo_line_pause_ms) end)
     end
 
-    test "never executes anything: it only answers canned outputs" do
-      assert {:ok, %{status: 0, output: "Submitted daemon job " <> _}} =
-               DemoCLI.run(
-                 [
-                   "--palace",
-                   "/demo/palace",
-                   "mine",
-                   "/demo/projects/x",
-                   "--daemon",
-                   "--background"
-                 ],
-                 []
-               )
-
-      assert {:ok, %{status: 0}} =
-               DemoCLI.run(["--palace", "/demo/palace", "sweep", "/demo/t", "--daemon"], [])
-
-      assert {:ok, %{status: 0}} = DemoCLI.run(["--palace", "/demo/palace", "compress"], [])
-    end
-
-    test "streams lines for direct commands" do
+    test "never executes anything: it streams canned output" do
       parent = self()
 
-      assert {:ok, %{status: 0}} =
-               DemoCLI.run(["--palace", "/demo/palace", "repair", "--dry-run"],
-                 on_output: &send(parent, {:line, &1})
-               )
+      for args <- [
+            ["--palace", "/demo/palace", "mine", "/demo/projects/x", "--direct"],
+            ["--palace", "/demo/palace", "sweep", "/demo/t", "--direct"],
+            ["--palace", "/demo/palace", "sync", "--direct", "--dry-run"],
+            ["--palace", "/demo/palace", "repair", "--yes"],
+            ["--palace", "/demo/palace", "compress"]
+          ] do
+        assert {:ok, %{status: 0, output: output}} =
+                 DemoCLI.run(args, on_output: &send(parent, {:line, &1}))
 
-      assert_received {:line, _}
-    end
-
-    test "daemon stop and start flip the daemon state", %{demo: demo, dir: dir} do
-      resolve = fn ->
-        Status.resolve(root: Path.join(dir, "daemon"), palace_path: demo.palace).state
+        assert output =~ "demo mode"
+        assert_received {:line, _}
       end
-
-      assert resolve.() == :running
-      assert {:ok, %{status: 0}} = DemoCLI.run(["--palace", demo.palace, "daemon", "stop"], [])
-      assert resolve.() == :stopped
-      assert {:ok, %{status: 0}} = DemoCLI.run(["--palace", demo.palace, "daemon", "start"], [])
-      assert resolve.() == :running
     end
 
     test "an unknown command is refused" do

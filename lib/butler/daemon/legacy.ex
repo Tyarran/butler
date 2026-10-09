@@ -11,8 +11,9 @@ defmodule Butler.Daemon.Legacy do
   """
 
   alias Butler.Daemon.Locator
-  alias Butler.Daemon.Status
   alias Butler.Palace
+
+  @proc_root "/proc"
 
   @type opt :: {:root, Path.t()} | {:palace_path, Path.t()} | {:proc_root, Path.t()}
 
@@ -28,10 +29,14 @@ defmodule Butler.Daemon.Legacy do
 
     case Locator.find(root, palace) do
       {:ok, %Locator{pid: pid}} when is_integer(pid) ->
-        Status.pid_alive?(pid, Keyword.get(opts, :proc_root, "/proc"))
+        pid_alive?(pid, Keyword.get(opts, :proc_root, @proc_root))
 
       _none ->
         false
     end
   end
+
+  # Linux only: liveness relies on `/proc`. A recycled PID could keep the
+  # worker blocked until the daemon's own cleanup removes its endpoint.
+  defp pid_alive?(pid, proc_root), do: File.dir?(Path.join(proc_root, "#{pid}"))
 end
