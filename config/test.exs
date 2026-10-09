@@ -33,6 +33,7 @@ config :butler,
       light: [bin: "/nonexistent/butler-test/mempalace-light-mcp"]
     }
   ],
+  state_dir: "/nonexistent/butler-test/state",
   palace_path: "/nonexistent/butler-test/palace",
   mempalace_home: "/nonexistent/butler-test/mempalace",
   mempalace_bin: "/nonexistent/butler-test/mempalace"

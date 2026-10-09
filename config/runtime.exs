@@ -27,6 +27,9 @@ config :butler, ButlerWeb.Endpoint,
 # Not applied in :test, where config/test.exs points to non-existent paths so
 # that a test can never touch a real MemPalace installation.
 if config_env() != :test do
+  # Butler's own state (queue database, API token): see Butler.Paths.
+  config :butler, state_dir: System.get_env("BUTLER_STATE_DIR")
+
   config :butler,
     palace_path: System.get_env("BUTLER_PALACE_PATH", "~/.config/mempalace/palace"),
     mempalace_home: System.get_env("BUTLER_MEMPALACE_HOME", "~/.mempalace"),

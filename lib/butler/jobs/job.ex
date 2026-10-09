@@ -1,6 +1,6 @@
 defmodule Butler.Jobs.Job do
   @moduledoc """
-  A job of the MemPalace daemon queue, parsed from a `jobs` table row.
+  A job of a queue, parsed from a `jobs` table row.
 
   Parsing is tolerant: malformed JSON columns are kept as raw strings,
   unparseable timestamps become `nil` and unknown states become `:unknown`
@@ -26,6 +26,7 @@ defmodule Butler.Jobs.Job do
     :payload,
     :result,
     :error,
+    :os_pid,
     state: :unknown,
     priority: 0,
     attempts: 0
@@ -45,6 +46,7 @@ defmodule Butler.Jobs.Job do
           payload: term(),
           result: term(),
           error: term(),
+          os_pid: non_neg_integer() | nil,
           attempts: non_neg_integer()
         }
 
@@ -68,6 +70,7 @@ defmodule Butler.Jobs.Job do
       payload: decode_json(row["payload_json"]),
       result: decode_json(row["result_json"]),
       error: decode_json(row["error_json"]),
+      os_pid: row["os_pid"],
       attempts: row["attempts"] || 0
     }
   end

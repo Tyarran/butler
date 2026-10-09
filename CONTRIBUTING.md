@@ -56,6 +56,9 @@ Butler is idiomatic Elixir. Nothing more, nothing less.
   `snake_case`, predicates end with `?`, no `is_` prefix except in guards.
 - **Errors**: return `{:ok, value}` / `{:error, reason}` tuples; reserve
   exceptions for programmer errors.
+- **State**: Butler's own files (queue database, token) live in the state
+  directory resolved by `Butler.Paths`. Tests always point it at a per-test
+  tmp dir (`@tag :tmp_dir`), never at a real location.
 - **Side effects at the edges**: contexts (`Butler.Jobs`, `Butler.Daemon`,
   `Butler.Commands`) hold the logic; LiveViews only call them and render.
 
@@ -63,10 +66,14 @@ Butler is idiomatic Elixir. Nothing more, nothing less.
 
 These are non-negotiable and covered by tests (see also [AGENTS.md](AGENTS.md)):
 
-1. Never read the daemon `token` file.
+1. Never read the Python daemon's `token` file. Butler only uses its own
+   token (`Butler.Token`, in its state directory, mode 600).
 2. Never call the daemon HTTP API (Butler serves the loopback-only MCP proxy
    routes, but has no HTTP client).
-3. The queue SQLite database is opened **read-only**.
+3. Butler reads and writes only its **own** queue database in its state
+   directory (`BUTLER_STATE_DIR`, dir mode 700, files mode 600; see
+   `Butler.Paths`). The Python daemon's queue is never written and, until the
+   cutover, only opened **read-only**.
 4. Every CLI call goes through the `Butler.CLI` behaviour, with an argument
    list (never a shell string) and a timeout. Sole exception:
    `Butler.MCP.Worker` keeps long-lived MCP backend processes (argument list,
