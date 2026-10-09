@@ -15,9 +15,9 @@ defmodule Butler.Application do
         {DNSCluster, query: Application.get_env(:butler, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Butler.PubSub},
         {Task.Supervisor, name: Butler.TaskSupervisor},
-        Butler.Commands.Direct
+        Butler.Maintenance,
+        Butler.MCP.Writer
       ] ++
-        [Butler.Maintenance, Butler.MCP.Writer] ++
         mcp_children() ++
         jobs_children() ++
         [
