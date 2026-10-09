@@ -13,7 +13,10 @@ mise run setup    # deps.get + assets
 mise run server   # http://localhost:4000
 ```
 
-Available tasks: `setup`, `server`, `test`, `format`, `lint`, `precommit`.
+Available tasks: `setup`, `server`, `test`, `format`, `lint`, `screenshots`,
+`precommit`. `mise run screenshots` regenerates the README screenshots (light
+and dark) from `mix butler.demo`; it needs node and a Chromium
+(`CHROMIUM_PATH`, default `/usr/bin/chromium`).
 
 ## Before every commit
 

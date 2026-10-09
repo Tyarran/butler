@@ -186,20 +186,29 @@ code and covered by tests:
 
 All screenshots are taken in demo mode, on synthetic data (`mix butler.demo`: a
 fake palace and a generated job queue; no `mempalace` command is ever run in
-that mode). Butler also ships a dark theme, selectable with the toggle at the
-bottom of the sidebar.
+that mode). Butler follows the system theme by default; the toggle at the
+bottom of the sidebar switches between system, light and dark. Each page is
+shown in both themes.
 
-| Daemon | Jobs |
+| Daemon (light) | Daemon (dark) |
 |---|---|
-| ![Daemon status](docs/screenshots/daemon-light.png) | ![Jobs list](docs/screenshots/jobs-light.png) |
+| ![Daemon status, light](docs/screenshots/daemon-light.png) | ![Daemon status, dark](docs/screenshots/daemon-dark.png) |
 
-| Job detail | Launch |
+| Jobs (light) | Jobs (dark) |
 |---|---|
-| ![Job detail with mine report](docs/screenshots/job-detail-light.png) | ![Launch forms](docs/screenshots/launch-light.png) |
+| ![Jobs list, light](docs/screenshots/jobs-light.png) | ![Jobs list, dark](docs/screenshots/jobs-dark.png) |
 
-| Maintenance |
-|---|
-| ![Direct maintenance commands](docs/screenshots/maintenance-light.png) |
+| Job detail (light) | Job detail (dark) |
+|---|---|
+| ![Job detail with mine report, light](docs/screenshots/job-detail-light.png) | ![Job detail with mine report, dark](docs/screenshots/job-detail-dark.png) |
+
+| Launch (light) | Launch (dark) |
+|---|---|
+| ![Launch forms, light](docs/screenshots/launch-light.png) | ![Launch forms, dark](docs/screenshots/launch-dark.png) |
+
+| Maintenance (light) | Maintenance (dark) |
+|---|---|
+| ![Direct maintenance commands, light](docs/screenshots/maintenance-light.png) | ![Direct maintenance commands, dark](docs/screenshots/maintenance-dark.png) |
 
 ## Documentation
 

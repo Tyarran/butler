@@ -22,6 +22,10 @@ run = "mix format"
 description = "Run Credo in strict mode"
 run = "mix credo --strict"
 
+[tasks.screenshots]
+description = "Regenerate the README screenshots (light + dark) from the demo"
+run = "scripts/screenshots.sh"
+
 [tasks.precommit]
 description = "Run all pre-commit checks"
 run = "mix precommit"
