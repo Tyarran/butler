@@ -59,15 +59,23 @@ defmodule ButlerWeb.MaintenanceLive do
   def handle_info(_message, socket), do: {:noreply, socket}
 
   defp load_active(socket) do
+    # One query per maintenance kind (the store lists active jobs first), so
+    # other kinds can never push a maintenance job out of the limit.
     jobs =
-      case Jobs.list(limit: 500) do
-        {:ok, jobs} -> Enum.filter(jobs, &(Job.active?(&1) and Kinds.maintenance?(&1.kind)))
-        {:error, _reason} -> []
-      end
+      Kinds.maintenance_kinds()
+      |> Enum.flat_map(&active_of_kind/1)
+      |> Enum.sort_by(& &1.created_at, :desc)
 
     socket
     |> assign(positions: Jobs.positions(), active_count: length(jobs))
     |> stream(:active, jobs, reset: true)
+  end
+
+  defp active_of_kind(kind) do
+    case Jobs.list(kind: kind, limit: 500) do
+      {:ok, jobs} -> Enum.filter(jobs, &Job.active?/1)
+      {:error, _reason} -> []
+    end
   end
 
   defp label(command) do

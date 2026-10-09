@@ -91,6 +91,48 @@ defmodule ButlerWeb.MaintenanceLiveTest do
     assert has_element?(view, "#maintenance-empty")
   end
 
+  test "a second confirm after the reset queues nothing more", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/maintenance")
+
+    view |> element("#run-repair") |> render_click()
+    view |> element("#confirm-ok") |> render_click()
+    assert [_one] = queued()
+
+    # A double click: the confirmation is already gone.
+    render_click(view, "confirm", %{})
+
+    assert [_one] = queued()
+    assert has_element?(view, "#maintenance-queued")
+    refute has_element?(view, "#confirm-dialog")
+  end
+
+  test "many jobs of other kinds do not hide a maintenance job", %{conn: conn} do
+    repair = Engine.job!("repair", payload: %{})
+    for _ <- 1..501, do: Engine.job!("sweep", payload: %{"target" => "/synthetic/t"})
+
+    {:ok, view, _html} = live(conn, ~p"/maintenance")
+
+    assert has_element?(view, "#maintenance-job-#{repair.id}")
+  end
+
+  test "every page shows the maintenance banner while a job runs, and drops it after",
+       %{conn: conn} do
+    on_exit(&Butler.Maintenance.leave/0)
+
+    views =
+      for path <- ["/jobs", "/launch", "/maintenance", "/mcp", "/palace", "/worker"] do
+        {:ok, view, _html} = live(conn, path)
+        refute has_element?(view, "#maintenance-banner")
+        view
+      end
+
+    :ok = Butler.Maintenance.enter("job-1234")
+    for view <- views, do: assert(has_element?(view, "#maintenance-banner"))
+
+    :ok = Butler.Maintenance.leave()
+    for view <- views, do: refute(has_element?(view, "#maintenance-banner"))
+  end
+
   test "ignores unknown commands", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/maintenance")
     render_click(view, "ask", %{"command" => "rm-rf", "mode" => "run"})
