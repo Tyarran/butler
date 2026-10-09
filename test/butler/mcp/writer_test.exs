@@ -54,6 +54,20 @@ defmodule Butler.MCP.WriterTest do
     assert :ok = Writer.stop(:no_such_writer)
   end
 
+  test "stop returns only once a TERM-ignoring process is really gone", %{tmp_dir: tmp} do
+    {w, _log} = start_writer(tmp, args: ["ignore_term"])
+    {:ok, _} = Writer.call_tool(w, "fake_ok", %{})
+    old = Writer.os_pid(w)
+
+    assert :ok = Writer.stop(w)
+    refute File.exists?("/proc/#{old}")
+  end
+
+  test "a stop that times out is an error, not :ok" do
+    silent = spawn_link(fn -> Process.sleep(:infinity) end)
+    assert {:error, :stop_timeout} = Writer.stop(silent, 50)
+  end
+
   test "a timeout kills the writer and is not retried", %{tmp_dir: tmp} do
     {w, log} = start_writer(tmp)
     {:ok, _} = Writer.call_tool(w, "fake_ok", %{})

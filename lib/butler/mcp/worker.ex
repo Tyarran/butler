@@ -46,6 +46,7 @@ defmodule Butler.MCP.Worker do
   @client_name "butler-mcp-proxy"
   @handshake_id 0
   @line_chunk_bytes 1_048_576
+  @kill_wait_ms 5_000
 
   @typedoc "Why a worker is not usable any more."
   @type exit_reason ::
@@ -335,9 +336,21 @@ defmodule Butler.MCP.Worker do
     after
       OSProcess.term_grace_ms() ->
         OSProcess.signal(os_pid, "KILL")
+        await_exit(port)
         OSProcess.close(port)
     end
 
     :ok
+  end
+
+  # After KILL, wait until the OS reports the process gone (hence its palace
+  # lock released) before going on; the bound only protects against a process
+  # stuck in uninterruptible sleep.
+  defp await_exit(port) do
+    receive do
+      {^port, {:exit_status, _status}} -> :ok
+    after
+      @kill_wait_ms -> :ok
+    end
   end
 end

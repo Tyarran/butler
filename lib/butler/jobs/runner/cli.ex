@@ -90,6 +90,9 @@ defmodule Butler.Jobs.Runner.CLI do
   defp outcome({:error, {:executable_not_found, bin}}, _timeout),
     do: {:error, %{class: "ExecutableNotFound", message: "executable not found: #{bin}"}}
 
+  defp outcome({:error, {:invalid_args, _} = reason}, _timeout),
+    do: {:error, %{class: "InvalidPayload", message: inspect(reason)}}
+
   defp outcome({:error, reason}, _timeout),
     do: {:error, %{class: "CLIError", message: inspect(reason)}}
 end

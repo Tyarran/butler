@@ -59,13 +59,19 @@ defmodule Butler.MCP.Writer do
 
   @doc """
   Stops the process and waits until it is gone (TERM, then KILL by `os_pid`).
-  Returns `:ok` when there is nothing to stop, or no writer at all.
+  Returns `:ok` when the process is gone, when there is nothing to stop, or
+  no writer at all (`:noproc`). When the writer does not answer in time the
+  process may still hold the palace lock: `{:error, :stop_timeout}`, and the
+  caller must not start a CLI job.
   """
-  @spec stop(GenServer.server()) :: :ok
-  def stop(server \\ __MODULE__) do
-    GenServer.call(server, :stop, @stop_timeout_ms)
+  @spec stop(GenServer.server(), timeout()) ::
+          :ok | {:error, :stop_timeout | {:stop_failed, term()}}
+  def stop(server \\ __MODULE__, timeout \\ @stop_timeout_ms) do
+    GenServer.call(server, :stop, timeout)
   catch
-    :exit, _reason -> :ok
+    :exit, {:noproc, _call} -> :ok
+    :exit, {:timeout, _call} -> {:error, :stop_timeout}
+    :exit, reason -> {:error, {:stop_failed, reason}}
   end
 
   @doc "The OS pid of the live process, or `nil`."

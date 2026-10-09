@@ -11,7 +11,10 @@ defmodule Butler.Jobs.Runner.MCP do
   is a failure when the JSON-RPC answer is an error, when the result has
   `isError`, or when the tool's JSON payload has `"success": false` or an
   `"error"` key. A palace-lock refusal (JSON-RPC code -32001 / failure kind
-  `peer_contention`, or the lock-refusal text) is `{:lock_refused, text}`. A
+  `peer_contention`, or the lock-refusal text *of an answer that already is a
+  failure*) is `{:lock_refused, text}`; a successful result is never
+  inspected for it, or the write would be re-run. Stored results are bounded
+  to 64 KB. A
   timeout kills the writer and fails the job.
   """
 
@@ -22,6 +25,7 @@ defmodule Butler.Jobs.Runner.MCP do
 
   @default_topic "general"
   @lock_code -32_001
+  @max_result_bytes 65_536
   @diary_keys ~w(agent_name entry topic wing)
 
   @type outcome :: CLIRunner.outcome()
@@ -126,11 +130,17 @@ defmodule Butler.Jobs.Runner.MCP do
     text = result |> Map.get("content", []) |> texts()
     payload = decode(text)
 
+    # The lock-refusal text is only looked for in an answer that already is a
+    # failure: a successful write that merely mentions it must not be re-run.
     cond do
-      CLIRunner.lock_refused?(text) -> {:lock_refused, text}
-      result["isError"] == true -> failure(text, payload)
-      failed?(payload) -> failure(text, payload)
-      true -> {:ok, %{tool: name, result: payload || text}}
+      not (result["isError"] == true or failed?(payload)) ->
+        {:ok, %{tool: name, result: bound_result(payload, text)}}
+
+      lock_failure?(payload, text) ->
+        {:lock_refused, tail(text)}
+
+      true ->
+        failure(text, payload)
     end
   end
 
@@ -156,8 +166,11 @@ defmodule Butler.Jobs.Runner.MCP do
   end
 
   defp failed?(%{"success" => false}), do: true
-  defp failed?(%{"error" => _error}), do: true
+  defp failed?(%{"error" => error}) when not is_nil(error), do: true
   defp failed?(_other), do: false
+
+  defp lock_failure?(%{"failure_kind" => "peer_contention"}, _text), do: true
+  defp lock_failure?(_payload, text), do: CLIRunner.lock_refused?(text)
 
   defp failure(text, payload) do
     message =
@@ -166,6 +179,23 @@ defmodule Butler.Jobs.Runner.MCP do
         _other -> text
       end
 
-    {:error, %{class: "MCPToolFailed", message: message, output_tail: text}}
+    {:error, %{class: "MCPToolFailed", message: tail(message), output_tail: tail(text)}}
+  end
+
+  # A tool result is stored in `result_json`: keep it bounded like a CLI tail.
+  defp bound_result(payload, text) do
+    if byte_size(text) <= @max_result_bytes do
+      payload || text
+    else
+      %{"truncated" => true, "text_tail" => tail(text)}
+    end
+  end
+
+  defp tail(text) when byte_size(text) <= @max_result_bytes, do: text
+
+  defp tail(text) do
+    text
+    |> binary_part(byte_size(text), -@max_result_bytes)
+    |> String.replace_invalid()
   end
 end

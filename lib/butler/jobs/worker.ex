@@ -28,7 +28,7 @@ defmodule Butler.Jobs.Worker do
 
   Options (mostly for tests): `:name`, `:queue` (default `Butler.Jobs.Queue`),
   `:task_supervisor`, `:timeouts` (kind => ms), `:lock_backoff_ms`,
-  `:grace_ms`, `:blocked_recheck_ms`, `:palace`, `:writer` (`Butler.MCP.Writer` server), `:signal` (`fn os_pid, name`,
+  `:grace_ms`, `:blocked_recheck_ms`, `:palace`, `:writer` (`Butler.MCP.Writer` server), `:writer_stop_timeout_ms`, `:signal` (`fn os_pid, name`,
   default `Butler.OSProcess.signal/2`), `:legacy_running?` (zero-arity fun),
   `:proc_root`.
   """
@@ -112,6 +112,7 @@ defmodule Butler.Jobs.Worker do
       recheck_ms: Keyword.get(opts, :blocked_recheck_ms, @blocked_recheck_ms),
       palace: Keyword.get(opts, :palace),
       writer: Keyword.get(opts, :writer, Writer),
+      writer_stop_timeout_ms: Keyword.get(opts, :writer_stop_timeout_ms, 30_000),
       signal: Keyword.get(opts, :signal, &OSProcess.signal/2),
       legacy_running?: Keyword.get(opts, :legacy_running?, &Legacy.running?/0),
       proc_root: Keyword.get(opts, :proc_root, "/proc"),
@@ -272,7 +273,7 @@ defmodule Butler.Jobs.Worker do
         end
       ] ++ if(state.palace, do: [palace: state.palace], else: [])
 
-    writer = state.writer
+    writer = {state.writer, state.writer_stop_timeout_ms}
 
     task =
       Task.Supervisor.async_nolink(state.task_supervisor, fn ->
@@ -288,12 +289,20 @@ defmodule Butler.Jobs.Worker do
   # Write MCP jobs go through the persistent writer. Every other job is a CLI
   # job: the writer holds the palace lock after a write, so it is stopped (and
   # gone) before the process starts. This covers maintenance kinds too.
-  defp run_job(%Job{kind: kind} = job, run_opts, writer) when kind in @mcp_kinds,
-    do: Runner.MCP.run(job, [writer: writer] ++ run_opts)
+  defp run_job(%Job{kind: kind} = job, run_opts, {writer, _stop_timeout})
+       when kind in @mcp_kinds,
+       do: Runner.MCP.run(job, [writer: writer] ++ run_opts)
 
-  defp run_job(job, run_opts, writer) do
-    :ok = Writer.stop(writer)
-    Runner.CLI.run(job, run_opts)
+  defp run_job(job, run_opts, {writer, stop_timeout}) do
+    case Writer.stop(writer, stop_timeout) do
+      :ok ->
+        Runner.CLI.run(job, run_opts)
+
+      {:error, reason} ->
+        # The writer may still hold the palace lock: never start the CLI. The
+        # job goes back to the queue (attempt refunded) and cools down.
+        {:lock_refused, "MCP writer could not be stopped: #{inspect(reason)}"}
+    end
   end
 
   defp settle(%{job: %Job{} = job} = state, outcome) do
@@ -355,6 +364,12 @@ defmodule Butler.Jobs.Worker do
 
   # -- Cancel and kill ---------------------------------------------------------
 
+  # Known residual race (docs/plan.md, phase 4): for a write MCP job the
+  # writer reports its os_pid (`on_start`) just before it sends the request,
+  # asynchronously. A cancel arriving in that window is only acted upon once
+  # the worker handles `{:os_pid, ...}`, by which time the request may already
+  # have been written; the writer is then killed mid-call and the job ends
+  # `cancelled`, but the write itself may or may not have been applied.
   defp request_cancel(%{os_pid: nil} = state), do: %{state | cancelling?: true}
   defp request_cancel(state), do: terminate_child(%{state | cancelling?: true})
 

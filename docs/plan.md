@@ -202,6 +202,12 @@ field?}}`: 400 `invalid_payload`, 401 `unauthorized`, 403 `forbidden` /
   backend with scripted `tools/call` outcomes (success, error key, lock refusal,
   hang). Tests: allowlist, diary mapping, no retry, timeout, stop-before-CLI.
   Commit: `feat(mcp): add persistent writer for queued write jobs`.
+  Review fixes: the lock-refusal text is only looked for in an answer that already is a
+  failure; `Writer.stop/1` returns `{:error, :stop_timeout}` (the CLI job is then deferred,
+  never started) and waits for the OS process after KILL. **Residual race (accepted):** a
+  cancel that arrives between the writer's `on_start(os_pid)` and the request being sent
+  is only acted on once the worker handles `{:os_pid, ...}`; the request may already be
+  written, so a `cancelled` write job may still have been applied.
 - **Phase 5 - Maintenance mode + proxy read allowlist.** `Butler.Maintenance` (ETS),
   `Backend.suspend/resume`, `MCP.suspend/resume`, proxy gating (immediate error
   -32001), read-tool allowlist on `tools/call`. Worker orchestrates enter ->

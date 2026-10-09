@@ -112,6 +112,27 @@ defmodule Butler.Jobs.Runner.MCPTest do
       assert text =~ "is held by"
     end
 
+    test "a successful result mentioning the refusal phrase stays succeeded, run once",
+         %{tmp_dir: tmp} do
+      {w, log} = start_writer(tmp)
+      assert {:ok, %{result: %{"success" => true}}} = run_tool(w, "fake_lock_text_ok")
+      assert calls(log) == ["fake_lock_text_ok"]
+    end
+
+    test "an error key set to null is not a failure", %{tmp_dir: tmp} do
+      {w, _} = start_writer(tmp)
+      assert {:ok, %{result: %{"error" => nil}}} = run_tool(w, "fake_error_null")
+    end
+
+    test "a huge result is truncated before being stored", %{tmp_dir: tmp} do
+      {w, _} = start_writer(tmp)
+
+      assert {:ok, %{result: %{"truncated" => true, "text_tail" => tail}}} =
+               run_tool(w, "fake_big")
+
+      assert byte_size(tail) <= 65_536
+    end
+
     test "a timeout kills the writer and fails the job", %{tmp_dir: tmp} do
       {w, log} = start_writer(tmp)
       assert {:error, %{class: "Timeout"}} = run_tool(w, "fake_hang", timeout_ms: 200)

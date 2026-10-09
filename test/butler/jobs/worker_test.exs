@@ -480,7 +480,10 @@ defmodule Butler.Jobs.WorkerTest do
     ExUnit.CaptureLog.capture_log(fn ->
       Process.exit(queue, :kill)
       assert_receive {:DOWN, ^ref, :process, ^worker, _reason}, 2_000
-      assert eventually(fn -> restarted?(queue, worker) end)
+      # The supervisor restarts both children inside one message handler:
+      # once it answers, the restart is over.
+      _ = :sys.get_state(name)
+      assert restarted?(queue, worker)
     end)
   end
 
@@ -518,6 +521,18 @@ defmodule Butler.Jobs.WorkerTest do
       assert Writer.os_pid(writer) == nil
     end
 
+    test "a writer that cannot be stopped defers the CLI job without starting it", %{q: q} do
+      silent = spawn_link(fn -> Process.sleep(:infinity) end)
+      job = mine(q, "blocked-by-writer")
+      start_worker(q, writer: silent, writer_stop_timeout_ms: 50)
+
+      await_state(job.id, :running)
+      id = job.id
+      assert_receive {:job_changed, %Job{id: ^id, state: :queued, error: %{} = error} = deferred}
+      assert deferred.attempts == 0
+      assert inspect(error) =~ "stop_timeout"
+    end
+
     test "the writer is stopped before every CLI job", %{q: q} do
       writer = start_writer()
       diary = enqueue(q, "diary_write", %{"agent_name" => "a", "entry" => "synthetic"})
@@ -547,13 +562,5 @@ defmodule Butler.Jobs.WorkerTest do
     queue = Process.whereis(Queue)
     worker = Process.whereis(Worker)
     is_pid(queue) and is_pid(worker) and queue != old_queue and worker != old_worker
-  end
-
-  defp eventually(fun, attempts \\ 40) do
-    cond do
-      fun.() -> true
-      attempts == 0 -> false
-      true -> Process.sleep(50) && eventually(fun, attempts - 1)
-    end
   end
 end

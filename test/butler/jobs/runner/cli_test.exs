@@ -48,6 +48,9 @@ defmodule Butler.Jobs.Runner.CLITest do
     assert {:error, %{class: "ExecutableNotFound"}} = run()
 
     expect(Butler.CLIMock, :run, fn _argv, _opts -> {:error, {:invalid_args, []}} end)
+    assert {:error, %{class: "InvalidPayload"}} = run()
+
+    expect(Butler.CLIMock, :run, fn _argv, _opts -> {:error, :eacces} end)
     assert {:error, %{class: "CLIError"}} = run()
   end
 
