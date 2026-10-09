@@ -222,7 +222,15 @@ field?}}`: 400 `invalid_payload`, 401 `unauthorized`, 403 `forbidden` /
   loses its blocking semantics and `lockedByMine`). ConnCase tests: 401, 403,
   413, schema errors, `deduplicated`, UI-only kinds refused, sync default dry-run,
   `include_payload` opt-in. Commit: `feat(api): add token-protected async job API`.
-- **Phase 7 - Dashboard and cutover.** Delete `Jobs.Watcher`, `Daemon.Control`,
+- **Phase 7 - DONE. Dashboard and cutover** (five commits, one per page or step).
+  Deviations: the `:start_queue` flag became `:start_jobs` (default `true`, `false`
+  only in `config/test.exs`, because tests start their own engine in a tmp state
+  dir); `Daemon.Status` was deleted too (`Legacy` keeps the PID liveness check
+  itself) while `Daemon.Locator` stays for `Legacy`; a `Butler.Jobs` facade is the
+  dashboard's door to Queue/Worker; UI form submissions carry a `ui:<kind>:<hash>`
+  `dedupe_key` (an identical active job is reported instead of queued twice);
+  `Jobs.retry` does not dedupe; the legacy `--daemon --background` builders of
+  `Kinds` were removed. Original scope: Delete `Jobs.Watcher`, `Daemon.Control`,
   `Commands.Direct`, `Commands.Guard`, the CLI-based `Commands.Submit`,
   `DaemonLive`, the `:start_queue` flag (engine on by default). Rewrite `JobsLive`
   (stream + `{:job_changed, job}`, filters, cancel/retry; retry of non-idempotent

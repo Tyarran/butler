@@ -1,7 +1,8 @@
 # Contributing to Butler
 
 Thanks for your interest in Butler, a local Phoenix LiveView dashboard to
-monitor and control the MemPalace daemon.
+run MemPalace jobs: Butler owns the job queue and the serial worker that
+replace the MemPalace Python daemon.
 
 ## Setup
 
@@ -41,14 +42,14 @@ Butler is idiomatic Elixir. Nothing more, nothing less.
   module right after `use`/`alias`/`import`/`require`:
 
   ```elixir
-  defmodule Butler.Jobs.Watcher do
+  defmodule Butler.Jobs.Queue do
     @moduledoc "..."
     use GenServer
 
     alias Butler.Jobs.Store
 
-    @poll_interval_ms 2_000
     @topic "butler:queue"
+    @call_timeout 15_000
   end
   ```
 
@@ -59,28 +60,32 @@ Butler is idiomatic Elixir. Nothing more, nothing less.
 - **State**: Butler's own files (queue database, token) live in the state
   directory resolved by `Butler.Paths`. Tests always point it at a per-test
   tmp dir (`@tag :tmp_dir`), never at a real location.
-- **Side effects at the edges**: contexts (`Butler.Jobs`, `Butler.Daemon`,
-  `Butler.Commands`) hold the logic; LiveViews only call them and render.
+- **Side effects at the edges**: contexts (`Butler.Jobs`, `Butler.Commands`,
+  `Butler.MCP`) hold the logic; LiveViews only call them and render.
+- **Job engine in tests**: the application does not start it in the test
+  environment (`start_jobs: false`). Tests start their own queue/worker in a
+  tmp state dir with `Butler.Test.Engine` (and are `async: false`).
 
 ## Safety invariants
 
 These are non-negotiable and covered by tests (see also [AGENTS.md](AGENTS.md)):
 
-1. Never read the Python daemon's `token` file. Butler only uses its own
-   token (`Butler.Token`, in its state directory, mode 600).
-2. Never call the daemon HTTP API (Butler serves the loopback-only MCP proxy
-   routes, but has no HTTP client).
-3. Butler reads and writes only its **own** queue database in its state
-   directory (`BUTLER_STATE_DIR`, dir mode 700, files mode 600; see
-   `Butler.Paths`). The Python daemon's queue is never written and, until the
-   cutover, only opened **read-only**.
-4. Every CLI call goes through the `Butler.CLI` behaviour, with an argument
-   list (never a shell string) and a timeout. Sole exception:
-   `Butler.MCP.Worker` keeps long-lived MCP backend processes (argument list,
-   configured binaries, kill by `os_pid`).
-5. Tests use [Mox](https://hex.pm/packages/mox) and fixture SQLite databases
-   with **synthetic** data. Never put real diary or `mcp_tool` content in
-   fixtures, docs or screenshots.
+1. Butler reads and writes only **its own** token and queue database, in its
+   state directory (`BUTLER_STATE_DIR`, dir mode 700, files mode 600; see
+   `Butler.Paths`, `Butler.Token`). It never reads `~/.mempalace/daemon/**`
+   (the Python daemon's token and queue) and never calls the Python daemon.
+2. Butler has no HTTP client; it only serves HTTP (dashboard, `/api/v1`, MCP
+   proxy; loopback, `Host`/`Origin` checked).
+3. Processes are spawned only through `Butler.CLI` (argument list, timeout,
+   kill by `os_pid`) and `Butler.MCP.Worker` (proxy backends and
+   `Butler.MCP.Writer`).
+4. Every routine CLI write carries `--direct`, never `--daemon` or
+   `--background`.
+5. Tests use [Mox](https://hex.pm/packages/mox), the fake MCP backend and
+   throwaway state dirs, with **synthetic** data. Never put real diary or
+   `mcp_tool` content in fixtures, docs or screenshots, and never run
+   `repair`, `compress`, `migrate-wings` or `sync --apply` against a real
+   palace.
 
 ## Tests
 

@@ -246,7 +246,7 @@ defmodule ButlerWeb.JobControllerTest do
       submit(conn, %{kind: "sync"})
       conn = get(conn, ~p"/api/v1/health")
 
-      # The worker is dormant in tests (`start_queue: false`).
+      # The worker is dormant in tests (`start_jobs: false`).
       assert %{"ok" => false, "worker" => "unavailable", "maintenance" => false} =
                body = json_response(conn, 503)
 

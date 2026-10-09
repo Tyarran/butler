@@ -12,7 +12,7 @@ const outDir = fileURLToPath(new URL("../docs/screenshots/", import.meta.url));
 
 // [file name, path, viewport height]. The job detail is resolved from the list.
 const pages = [
-  ["daemon", "/daemon", 900],
+  ["worker", "/worker", 900],
   ["jobs", "/jobs", 1100],
   ["job-detail", null, 1100],
   ["launch", "/launch", 1500],

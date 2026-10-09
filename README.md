@@ -1,6 +1,6 @@
 <h1 align="center">Butler</h1>
 
-<p align="center"><strong>A local dashboard to monitor and control your MemPalace daemon</strong></p>
+<p align="center"><strong>A local job queue, worker and dashboard that replace the MemPalace Python daemon</strong></p>
 
 <p align="center">
   <a href="https://github.com/OWNER/butler/actions/workflows/ci.yml">
@@ -11,43 +11,48 @@
 
 ---
 
-The MemPalace daemon runs mining and MCP jobs in the background, and the only
-way to follow them is to poll the CLI. Butler is a small, local Phoenix
-LiveView app that shows the daemon status and its job queue live, lets you
-submit `mine`, `sweep` and `sync` (dry-run) jobs, and runs the maintenance
-commands that need the daemon stopped (`repair`, `compress`, `migrate-wings`)
-safely.
+Butler is a small, local Phoenix LiveView app that **owns the MemPalace job
+queue**. It stores jobs in its own SQLite database, runs them one at a time
+(ephemeral `mempalace` CLI processes, plus one persistent `mempalace-mcp`
+writer for MCP write jobs), exposes a token-protected asynchronous HTTP API
+for [pi-palace](docs/api.md), gates the MCP proxy during maintenance, and
+shows everything live in a dashboard.
 
-Butler is read-only toward the daemon's data: it reads the job queue in
-SQLite read-only and talks to the daemon exclusively through the `mempalace`
-CLI. It never reads the daemon token and never calls its HTTP API.
+The MemPalace Python daemon is **no longer used**: Butler never reads its
+files nor calls it (hard cut, no history import). See
+[Replacing the Python daemon](#replacing-the-python-daemon).
 
 ```mermaid
 flowchart LR
     B[Browser] -->|LiveView| W[ButlerWeb]
+    A[pi-palace] -->|Bearer token, loopback| W
+    G[MCP clients] -->|read tools, loopback| W
     W --> C[Butler.Commands]
-    W --> J[Butler.Jobs]
-    W --> D[Butler.Daemon]
-    C -->|argument lists, timeout| CLI[Butler.CLI]
-    D -->|start / stop| CLI
+    W --> J[Butler.Jobs facade]
+    C --> J
+    J --> Q[(Queue: queue.sqlite3)]
+    Q --> K[Worker, strictly serial]
+    K -->|argument list, timeout| CLI[Butler.CLI]
     CLI --> M[mempalace CLI]
-    M -->|submits jobs| P[(MemPalace daemon)]
-    P -->|writes| Q[(queue.sqlite3)]
-    J -->|read-only| Q
-    D -->|endpoint.json, /proc| S[daemon state dir]
-    J -.->|PubSub on change| W
+    K --> R[MCP.Writer]
+    R --> E[mempalace-mcp]
+    K -->|gates| X[MCP proxy]
+    W --> X
+    Q -.->|PubSub| W
 ```
 
-The layers only depend downward: LiveViews render and delegate, `Butler.Commands`
-validates and orchestrates, and anything that spawns a process goes through the
-single `Butler.CLI` behaviour.
+The layers only depend downward: LiveViews render and delegate to
+`Butler.Commands` / `Butler.Jobs`; anything that spawns a process goes through
+`Butler.CLI` (ephemeral jobs) or `Butler.MCP.Worker` (proxy backends and the
+writer).
 
 ## Installation
 
 Butler runs from source (there is no release package yet). You need
 [mise](https://mise.jdx.dev), which installs Erlang/OTP 29 and Elixir 1.20,
 and a working [MemPalace](https://github.com/MemPalace/mempalace) installation
-with `mempalace` in your `PATH`. Linux only (daemon liveness uses `/proc`).
+with `mempalace` in your `PATH`. Linux only (the legacy-daemon check and the
+orphan reaper use `/proc`).
 
 ```bash
 git clone https://github.com/OWNER/butler.git
@@ -64,22 +69,42 @@ Start Butler (it is a local tool, launched manually):
 mise run server     # http://localhost:4000
 ```
 
-Then open <http://localhost:4000>:
+The job engine starts with the app. Open <http://localhost:4000>:
 
 | Page | What you do there |
 |---|---|
-| **Daemon** | See whether the daemon runs, its PID, and job counters. Start, stop or restart it. |
-| **Jobs** | Follow the queue live, filter by state or kind, open a job to read its payload, error and `mine` report. |
-| **Launch** | Submit `mine`, `sweep` and `sync` (dry run only) jobs to the daemon. |
-| **Maintenance** | Run `repair`, `compress` and `migrate-wings`: Butler stops the daemon, runs the command with live output, and restarts the daemon. |
+| **Worker** | See the worker status (`idle`, `running`, `blocked`), its active job, the job counters and the maintenance flag. |
+| **Jobs** | Follow the queue live, filter by state or kind, cancel queued or running jobs, retry failed or cancelled ones (a confirmation is needed for kinds that are not idempotent). Open a job for its live output, tail, result and error. The payload of `diary_write` and `mcp_tool` jobs is never shown. |
+| **Launch** | Queue `mine`, `sweep` and `sync` jobs. A sync is a dry run; applying it needs a wing or roots and a confirmation. |
+| **Maintenance** | Queue `repair`, `compress` and `migrate-wings` (dry runs included) after a confirmation. Nothing runs from the page: the worker runs the job when its turn comes, and the queue position is shown. |
 | **MCP** | See the state of the MCP proxy backends (`full`, `light`), the time before the next rotation, client sessions and requests; force a restart. |
 | **Palace** | Placeholder for a future visualization. |
+
+While a maintenance job runs, a banner is shown on every page and the MCP
+proxy refuses every request.
 
 Butler watches the palace in `~/.config/mempalace/palace` by default; it can be
 pointed elsewhere (see [Configuration](#configuration)).
 
-No MemPalace at hand? `mix butler.demo` runs Butler on synthetic data; the
-`mempalace` CLI is then replaced by a stub that executes nothing.
+No MemPalace at hand? `mix butler.demo` runs Butler on synthetic data in a
+throwaway state dir; the `mempalace` CLI is then replaced by a stub that
+executes nothing.
+
+## Replacing the Python daemon
+
+Two writers must never share a palace. Before using Butler:
+
+1. **Stop the Python daemon** (`mempalace daemon stop`) and keep it stopped.
+   Butler's worker stays `blocked` (see the **Worker** page) while the
+   daemon's PID is alive.
+2. **Set write routing to direct** for your own tools, so that nothing starts
+   or forwards to a daemon again (`MEMPALACE_CLI_WRITE_ROUTING=direct`,
+   `MEMPALACE_WRITE_ROUTING=direct`, `MEMPALACE_HUB_FORWARD=0`). Butler sets
+   these for every process it spawns and adds `--direct` to every command that
+   has routing flags.
+3. Point pi-palace at Butler's [HTTP API](docs/api.md).
+
+Jobs of the Python daemon are not imported.
 
 ## Configuration
 
@@ -88,19 +113,26 @@ read at startup by `config/runtime.exs`:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `BUTLER_PALACE_PATH` | `~/.config/mempalace/palace` | The palace to monitor and control. |
-| `BUTLER_MEMPALACE_HOME` | `~/.mempalace` | MemPalace state home; daemon state lives in `<home>/daemon/<id>/`. |
-| `MEMPALACE_DAEMON_STATE_ROOT` | `<home>/daemon` | Same variable as the daemon's own: overrides the daemon state root. Inherited by the CLI processes Butler starts. |
+| `BUTLER_PALACE_PATH` | `~/.config/mempalace/palace` | The palace to control. |
+| `BUTLER_STATE_DIR` | `$XDG_STATE_HOME/butler`, else `~/.local/state/butler` | Butler's own state: `queue.sqlite3` (mode 600) and the API `token` (mode 600), in a directory of mode 700. |
+| `BUTLER_RETENTION_DAYS` | `7` | Terminal jobs (and their payloads) older than this are pruned at startup, then daily. |
+| `BUTLER_LOCK_BACKOFF_SECONDS` | `60` | Cooldown before a job refused by the palace lock is claimed again. |
+| `BUTLER_MEMPALACE_HOME` | `~/.mempalace` | MemPalace home, shared by every process Butler spawns (and where the legacy daemon is looked for). |
+| `MEMPALACE_DAEMON_STATE_ROOT` | `<home>/daemon` | Where the legacy daemon's `endpoint.json` is looked for (PID liveness only). |
 | `BUTLER_MEMPALACE_BIN` | `mempalace` | The `mempalace` executable (resolved through `PATH`). |
 | `PORT` | `4000` | HTTP port. |
 | `BUTLER_MCP_ENABLED` | `true` | `false` disables the MCP proxy. |
 | `BUTLER_MCP_ROTATION_MINUTES` | `10` | Idle time after which a backend process is recycled. |
-| `BUTLER_MCP_FULL_BIN` | `mempalace-mcp` | Executable of the `full` backend. |
+| `BUTLER_MCP_FULL_BIN` | `mempalace-mcp` | Executable of the `full` backend (and of the persistent writer). |
 | `BUTLER_MCP_LIGHT_BIN` | `mempalace-light-mcp` | Executable of the `light` backend. |
 
-One application setting is not an environment variable:
-`config :butler, :blocking_job_states, [:queued, :running]` lists the job
-states that make Butler refuse direct maintenance commands.
+## HTTP API
+
+pi-palace (the only client) submits `mine`, `sweep`, `sync`, `diary_write` and
+`mcp_tool` jobs to `POST /api/v1/jobs` with a Bearer token, and polls
+`GET /api/v1/jobs/:id`. See [docs/api.md](docs/api.md) for the contract. The
+token is Butler's own, in `<state dir>/token`. `repair`, `compress` and
+`migrate-wings` are UI-only.
 
 ## MCP proxy
 
@@ -110,14 +142,16 @@ processes per backend** over HTTP instead:
 
 | Route | Backend |
 |---|---|
-| `POST http://localhost:4000/mcp/full` | `mempalace-mcp` (all tools) |
+| `POST http://localhost:4000/mcp/full` | `mempalace-mcp` (read tools) |
 | `POST http://localhost:4000/mcp/light` | `mempalace-light-mcp` (`palace_query`, `palace_exec`, `palace_coordinate`) |
 
 It speaks the MCP "Streamable HTTP" transport in its simplest form: one JSON
 request, one JSON answer, an `Mcp-Session-Id` header managed by Butler, no
 server-sent events (`GET` answers `405`, `DELETE` ends a session). It is a
-transparent proxy: every tool of the backend is exposed, writes included. It
-serves the palace Butler is configured for (`BUTLER_PALACE_PATH`).
+**read** proxy: only an allowlist of read tools is forwarded; write tools are
+refused ("write tools must be submitted through the Butler API") and go
+through the job queue instead. It serves the palace Butler is configured for
+(`BUTLER_PALACE_PATH`).
 
 Point an MCP client at it, for example with the HTTP transport of your agent:
 
@@ -132,67 +166,69 @@ How it works:
   is killed (its memory goes back to the system) and a new standby starts. This
   happens even when nobody uses the proxy.
 - If the active process crashes, the requests in flight get an error right
-  away (nothing is retried, so a write is never executed twice) and the standby
-  takes over.
+  away (nothing is retried) and the standby takes over.
 - If a backend cannot start (missing binary, palace error) after 3 attempts in
   a row, it is marked **failed** on the MCP page; **Restart** tries again.
 - Sessions belong to Butler, not to a process: rotations and crashes do not
   invalidate them.
+- During a maintenance job (`repair`, `compress`, `migrate-wings`) every
+  request is answered at once with the JSON-RPC error `-32001` "Maintenance
+  in progress, retry later", and the backend processes are stopped until the
+  job ends. Reads stay allowed during `mine` and `sweep`.
 
 The routes accept loopback connections only and check the `Host` and `Origin`
 headers (against DNS rebinding and web pages aiming at `localhost`). There is
-**no authentication**: anything running on your machine can use them. The
-processes' stderr goes to Butler's logs.
+**no authentication** on the MCP routes: anything running on your machine can
+use them. The processes' stderr goes to Butler's logs.
 
 ## Safety rules
 
 Butler is built to be harmless to your palace. These rules are enforced by the
 code and covered by tests:
 
-- It **never reads the daemon `token` file** and **never calls the daemon HTTP
-  API**. Everything goes through the `mempalace` CLI.
-- The job queue (`queue.sqlite3`) is opened **read-only**; Butler cannot modify it.
-- Every CLI call uses an **argument list** (never a shell string) and a
-  **timeout**; on timeout the process is killed by its OS pid. The only
-  long-lived processes are the MCP proxy backends, started the same way and
-  killed by OS pid.
-- The MCP proxy **serves** HTTP on loopback but Butler still has no HTTP
-  client.
-- `sync` is **always a dry run**: `sync --apply` is not exposed and cannot be built.
-- Values are validated before reaching the CLI (absolute existing paths,
-  whitelisted modes, positive integers, nothing that looks like an option).
-- `repair`, `compress` and `migrate-wings` are **refused while jobs are queued
-  or running**; Butler stops the daemon, waits until it is really stopped,
-  re-checks the queue, runs the command, and restarts the daemon even if the
-  command fails or times out. Only one such run can happen at a time.
-- Tests use mocks and fixture databases with **synthetic data** only.
+- Butler reads and writes only **its own** token and queue database, in its
+  state directory. It **never reads `~/.mempalace/daemon/**`** (the Python
+  daemon's token and queue) and never calls the Python daemon.
+- Butler has **no HTTP client**: it only serves HTTP (the dashboard, the API
+  and the MCP proxy, on loopback, with `Host` and `Origin` checks).
+- Processes are spawned only through `Butler.CLI` (argument lists, timeouts,
+  kill by OS pid) and `Butler.MCP.Worker` (proxy backends and the persistent
+  writer, which is always stopped before a CLI job).
+- Every routine CLI write carries `--direct`, never `--daemon` or
+  `--background`, and the routing environment variables force direct writes.
+- Payloads are validated before they are queued, with the rules the worker
+  applies (absolute paths, whitelisted modes, positive integers, nothing that
+  looks like an option, no client-chosen palace).
+- `sync` is a dry run by default; `--apply` needs an explicit request, a wing
+  or roots, and (in the UI) a confirmation.
+- The worker is strictly serial; a failed job is never retried automatically
+  (only idempotent jobs interrupted by a crash or shutdown are re-queued, at
+  most 3 attempts); the jobs of the maintenance kinds put the MCP proxy in
+  maintenance mode and the proxy is always resumed afterwards.
+- The payloads of `diary_write` and `mcp_tool` jobs are verbatim content: they
+  are never shown in the dashboard nor returned by the API without
+  `include_payload=true`, and they are pruned with their job.
+- Tests use mocks, a fake MCP backend and throwaway state dirs, with
+  **synthetic data** only; they never run destructive commands against a real
+  palace.
 
 ### Things to know
 
-- **Stopping the daemon** waits up to 10 seconds for the running job to finish.
-  If it is still running, the daemon marks it `cancelled`; it is **not**
-  resumed automatically when the daemon starts again. Queued jobs stay queued.
-- `mempalace ... --daemon` (used by the Launch page) **starts the daemon** if it
-  is not running.
-- The CLI does not deduplicate the jobs it submits, so Butler refuses to submit
-  a job identical to a queued or running one (best effort).
-- Daemon liveness uses `/proc`: **Linux only**.
-- Out of scope for now: palace visualization, live job progress (the daemon
-  only writes a job's result when it ends), cancelling or retrying a job,
-  `sync --apply`, remote access or authentication, several palaces, streaming
-  (SSE) and batches in the MCP proxy.
+- **Cancelling a running job** sends `TERM`, then `KILL` after a grace period,
+  to its process. A cancelled write job may already have been applied.
+- A job refused by the palace lock (held by another process) goes back to the
+  queue and is not claimed again for a cooldown.
+- Out of scope for now: palace visualization, remote access, several palaces,
+  streaming (SSE) and batches in the MCP proxy, migration of the Python
+  daemon's history, supervision of Butler itself (systemd...).
 
 ## Screenshots
 
-All screenshots are taken in demo mode, on synthetic data (`mix butler.demo`: a
+Screenshots are taken in demo mode, on synthetic data (`mix butler.demo`: a
 fake palace and a generated job queue; no `mempalace` command is ever run in
 that mode). Butler follows the system theme by default; the toggle at the
-bottom of the sidebar switches between system, light and dark. Each page is
-shown in both themes.
-
-| Daemon (light) | Daemon (dark) |
-|---|---|
-| ![Daemon status, light](docs/screenshots/daemon-light.png) | ![Daemon status, dark](docs/screenshots/daemon-dark.png) |
+bottom of the sidebar switches between system, light and dark. Regenerate them
+with `mise run screenshots`.
 
 | Jobs (light) | Jobs (dark) |
 |---|---|
@@ -201,14 +237,6 @@ shown in both themes.
 | Job detail (light) | Job detail (dark) |
 |---|---|
 | ![Job detail with mine report, light](docs/screenshots/job-detail-light.png) | ![Job detail with mine report, dark](docs/screenshots/job-detail-dark.png) |
-
-| Launch (light) | Launch (dark) |
-|---|---|
-| ![Launch forms, light](docs/screenshots/launch-light.png) | ![Launch forms, dark](docs/screenshots/launch-dark.png) |
-
-| Maintenance (light) | Maintenance (dark) |
-|---|---|
-| ![Direct maintenance commands, light](docs/screenshots/maintenance-light.png) | ![Direct maintenance commands, dark](docs/screenshots/maintenance-dark.png) |
 
 | MCP (light) | MCP (dark) |
 |---|---|
@@ -219,9 +247,11 @@ shown in both themes.
 | To... | Read |
 |---|---|
 | Install and try it | [Installation](#installation), [Quickstart](#quickstart), [Screenshots](#screenshots) |
+| Leave the Python daemon | [Replacing the Python daemon](#replacing-the-python-daemon) |
 | Configure it | [Configuration](#configuration) |
+| Call it from pi-palace | [docs/api.md](docs/api.md) |
 | Trust it | [Safety rules](#safety-rules) |
-| Understand or change it | [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) |
+| Understand or change it | [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md), [docs/plan.md](docs/plan.md) |
 
 ## Contributing
 

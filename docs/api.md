@@ -3,6 +3,12 @@
 Asynchronous, fire-and-forget job API for pi-palace (its only client). Butler
 queues the job and answers at once; the client polls `GET /api/v1/jobs/:id`.
 
+The job engine (queue and serial worker) starts with Butler. While the legacy
+Python daemon is still alive the worker is `blocked`: jobs are accepted and
+queued but none runs (`GET /api/v1/health` reports `worker: "blocked"`). Stop
+the Python daemon first. If the engine is down, every endpoint that needs the
+queue answers `503 queue_unavailable`.
+
 ## Access
 
 - Loopback only: peer address, `Host` (`localhost`, `127.0.0.1`, `::1`) and

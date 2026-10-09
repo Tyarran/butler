@@ -1,5 +1,14 @@
 # Test inventory (phase 0)
 
+> **Historical snapshot.** Phase 7 deleted the tests of `Commands.Guard`,
+> `Commands.Direct`, the CLI-based `Commands.Submit`, `Daemon.Status`,
+> `Daemon.Control`, `Jobs.Watcher`, `DaemonLive` and the daemon-based
+> `DaemonFixture`, and rewrote the `JobsLive`, `JobLive`, `LaunchLive`,
+> `MaintenanceLive` and demo tests on Butler's own queue (`test/support/engine.ex`,
+> `Butler.Test.Engine`). New: `jobs_test.exs`, `commands/submit_test.exs`,
+> `live/worker_live_test.exs`. The tables below describe the state before the
+> daemon replacement.
+
 Snapshot of `test/**` before the daemon-replacement work. `n` is the number of
 `test "..."` blocks. Mox mock: `Butler.CLIMock` (`Mox.defmock(Butler.CLIMock, for: Butler.CLI)`
 in `test/test_helper.exs`, selected through `config :butler, :cli`, see `config/test.exs`).
