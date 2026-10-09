@@ -3,10 +3,14 @@ defmodule Butler.Demo do
   Builds a demo Butler state directory filled with **synthetic** data, to try
   or screenshot Butler without a real palace (see `mix butler.demo`).
 
+  Only **terminal** (succeeded, failed, cancelled) and **queued** rows are
+  seeded, never a `running` one: a running row has no live worker behind it,
+  so the engine would have to recover it at startup.
+
   The demo has a fake palace (`/demo/palace`, which never exists on disk) and
   a queue database in Butler's own schema (created by
-  `Butler.Jobs.Store.open/1`, so with the right file modes) holding jobs in
-  every state. The demo home has no Python daemon, so the worker is not
+  `Butler.Jobs.Store.open/1`, so with the right file modes) holding
+  queued and finished jobs. The demo home has no Python daemon, so the worker is not
   blocked; the CLI is `Butler.CLI.Demo`, which runs nothing.
   """
 
@@ -69,14 +73,6 @@ defmodule Butler.Demo do
 
     finished_mines ++
       [
-        job(20,
-          kind: "mine",
-          state: "running",
-          payload: mine_payload("ivory"),
-          created_at: DateTime.add(now, -250, :second),
-          started_at: DateTime.add(now, -240, :second),
-          attempts: 1
-        ),
         job(21,
           kind: "sweep",
           state: "queued",

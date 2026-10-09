@@ -224,23 +224,15 @@ code and covered by tests:
 
 ## Screenshots
 
-Screenshots are taken in demo mode, on synthetic data (`mix butler.demo`: a
-fake palace and a generated job queue; no `mempalace` command is ever run in
-that mode). Butler follows the system theme by default; the toggle at the
-bottom of the sidebar switches between system, light and dark. Regenerate them
-with `mise run screenshots`.
-
-| Jobs (light) | Jobs (dark) |
-|---|---|
-| ![Jobs list, light](docs/screenshots/jobs-light.png) | ![Jobs list, dark](docs/screenshots/jobs-dark.png) |
-
-| Job detail (light) | Job detail (dark) |
-|---|---|
-| ![Job detail with mine report, light](docs/screenshots/job-detail-light.png) | ![Job detail with mine report, dark](docs/screenshots/job-detail-dark.png) |
-
-| MCP (light) | MCP (dark) |
-|---|---|
-| ![MCP proxy status, light](docs/screenshots/mcp-light.png) | ![MCP proxy status, dark](docs/screenshots/mcp-dark.png) |
+The screenshots were **removed** from the repository: they predated the final
+queue/worker dashboard and showed a demo queue with a `running` row. Generate
+fresh ones (light and dark, into `docs/screenshots/`) with
+`mise run screenshots`. It takes them in demo mode, on synthetic data
+(`mix butler.demo`: a fake palace and a generated queue of queued and finished
+jobs; no `mempalace` command is ever run in that mode), and needs node and a
+Chromium (`CHROMIUM_PATH`, default `/usr/bin/chromium`). Butler follows the
+system theme by default; the toggle at the bottom of the sidebar switches
+between system, light and dark.
 
 ## Documentation
 

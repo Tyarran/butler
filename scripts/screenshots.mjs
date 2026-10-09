@@ -1,6 +1,7 @@
 // Takes the README screenshots (light + dark) of a running `mix butler.demo`.
 // Run through scripts/screenshots.sh, which installs playwright-core in
 // PLAYWRIGHT_DIR and starts the demo server (BASE_URL). Needs a Chromium.
+import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +10,7 @@ const { chromium } = createRequire(`${process.env.PLAYWRIGHT_DIR}/`)("playwright
 const base = process.env.BASE_URL;
 const chrome = process.env.CHROMIUM_PATH ?? "/usr/bin/chromium";
 const outDir = fileURLToPath(new URL("../docs/screenshots/", import.meta.url));
+mkdirSync(outDir, { recursive: true });
 
 // [file name, path, viewport height]. The job detail is resolved from the list.
 const pages = [

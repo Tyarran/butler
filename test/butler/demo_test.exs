@@ -15,6 +15,22 @@ defmodule Butler.DemoTest do
     {:ok, demo: Demo.build!(tmp)}
   end
 
+  # Reads through a handle, like the engine does.
+  defp read(queue, fun) do
+    {:ok, db} = Store.open(queue)
+
+    try do
+      fun.(db)
+    after
+      Store.close(db)
+    end
+  end
+
+  defp all_jobs(queue) do
+    {:ok, jobs} = read(queue, &Store.list(&1, limit: 1_000))
+    jobs
+  end
+
   test "builds Butler's own queue in a private state dir", %{demo: demo, tmp_dir: tmp} do
     assert demo.state_dir == Path.join(tmp, "state")
     assert demo.queue == Path.join(demo.state_dir, "queue.sqlite3")
@@ -27,37 +43,39 @@ defmodule Butler.DemoTest do
     Store.close(db)
   end
 
-  test "contains jobs in every state, with a running one", %{demo: demo} do
-    assert {:ok, counts} = Store.counts(demo.queue)
+  test "contains queued and terminal jobs, and no running one", %{demo: demo} do
+    assert {:ok, counts} = read(demo.queue, &Store.counts/1)
 
-    for state <- ~w(queued running succeeded failed cancelled)a do
+    for state <- ~w(queued succeeded failed cancelled)a do
       assert counts[state] > 0, "expected at least one #{state} job"
     end
+
+    # A running row would be recovered (or confused with a live job) by the engine.
+    assert counts.running == 0
   end
 
   test "contains every kind shown in the dashboard and enough history for the hint", %{
     demo: demo
   } do
-    {:ok, jobs} = Store.list(demo.queue, limit: 1_000)
+    jobs = all_jobs(demo.queue)
     kinds = jobs |> Enum.map(& &1.kind) |> Enum.uniq() |> Enum.sort()
 
     assert Enum.all?(~w(mine sweep sync mcp_tool diary_write), &(&1 in kinds))
 
-    running = Enum.find(jobs, &(&1.state == :running))
+    queued_mine = Enum.find(jobs, &(&1.kind == "mine" and &1.state == :queued))
+    running = %{queued_mine | state: :running, started_at: DateTime.utc_now()}
     assert DurationHint.hint(running, jobs) =~ "usual duration"
   end
 
   test "every payload is valid for the worker", %{demo: demo} do
-    {:ok, jobs} = Store.list(demo.queue, limit: 1_000)
-
-    for job <- jobs do
+    for job <- all_jobs(demo.queue) do
       assert {:ok, _payload} = Kinds.validate_payload(job.kind, job.payload),
              "invalid #{job.kind} payload: #{inspect(job.payload)}"
     end
   end
 
   test "mine jobs carry an output tail and failed jobs an error", %{demo: demo} do
-    {:ok, jobs} = Store.list(demo.queue, limit: 1_000)
+    jobs = all_jobs(demo.queue)
 
     mine = Enum.find(jobs, &(&1.kind == "mine" and &1.state == :succeeded))
     assert mine.result["output_tail"] =~ "MemPalace Mine"
@@ -68,7 +86,7 @@ defmodule Butler.DemoTest do
   end
 
   test "all content is synthetic: no home directory path leaks into the data", %{demo: demo} do
-    {:ok, jobs} = Store.list(demo.queue, limit: 1_000)
+    jobs = all_jobs(demo.queue)
     dump = inspect(jobs, limit: :infinity, printable_limit: :infinity)
 
     refute dump =~ System.user_home!()
@@ -76,8 +94,8 @@ defmodule Butler.DemoTest do
   end
 
   test "is deterministic apart from timestamps", %{tmp_dir: tmp} do
-    {:ok, first} = Store.list(Demo.build!(Path.join(tmp, "first")).queue, limit: 1_000)
-    {:ok, second} = Store.list(Demo.build!(Path.join(tmp, "second")).queue, limit: 1_000)
+    first = all_jobs(Demo.build!(Path.join(tmp, "first")).queue)
+    second = all_jobs(Demo.build!(Path.join(tmp, "second")).queue)
 
     assert Enum.map(first, & &1.id) == Enum.map(second, & &1.id)
   end

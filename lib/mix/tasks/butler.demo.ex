@@ -7,12 +7,12 @@ defmodule Mix.Tasks.Butler.Demo do
       mix butler.demo [--dir DIR] [--port PORT] [--build-only]
 
   It builds a demo state directory (`BUTLER_STATE_DIR`, `<dir>/state`)
-  containing a job queue with jobs in every state, then starts the web server
+  containing a job queue with queued and finished jobs (never a running one), then starts the web server
   on it.
 
   In demo mode the `mempalace` CLI is replaced by `Butler.CLI.Demo`, which
   runs no program, and the MCP binaries point to nonexistent paths: every
-  button is safe to click. Do not use the HTTP API against a demo instance.
+  button is safe to click.
 
   ## Options
 
