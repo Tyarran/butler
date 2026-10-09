@@ -8,6 +8,7 @@ defmodule Butler.Jobs.WorkerTest do
   alias Butler.Jobs.Kinds
   alias Butler.Jobs.Queue
   alias Butler.Jobs.Worker
+  alias Butler.MCP.Writer
 
   @moduletag :tmp_dir
 
@@ -481,6 +482,65 @@ defmodule Butler.Jobs.WorkerTest do
       assert_receive {:DOWN, ^ref, :process, ^worker, _reason}, 2_000
       assert eventually(fn -> restarted?(queue, worker) end)
     end)
+  end
+
+  describe "write MCP jobs and the writer" do
+    @fake_mcp Path.expand("../../support/fake_mcp.sh", __DIR__)
+
+    defp start_writer do
+      name = :"writer_#{System.unique_integer([:positive])}"
+
+      start_supervised!({Writer, name: name, bin: @fake_mcp, startup_timeout_ms: 5_000})
+
+      name
+    end
+
+    test "diary_write and mcp_tool run through the writer", %{q: q} do
+      writer = start_writer()
+      diary = enqueue(q, "diary_write", %{"agent_name" => "a", "entry" => "synthetic"})
+      tool = enqueue(q, "mcp_tool", %{"name" => "mempalace_add_drawer", "arguments" => %{}})
+      start_worker(q, writer: writer)
+
+      assert %Job{result: %{"tool" => "mempalace_diary_write"}} =
+               await_state(diary.id, :succeeded)
+
+      assert %Job{result: %{"tool" => "mempalace_add_drawer"}} = await_state(tool.id, :succeeded)
+      assert is_integer(Writer.os_pid(writer))
+    end
+
+    test "a failed write is failed, not retried", %{q: q} do
+      writer = start_writer()
+      job = enqueue(q, "mcp_tool", %{"name" => "mempalace_add_drawer", "arguments" => 1})
+      start_worker(q, writer: writer)
+
+      failed = await_state(job.id, :failed)
+      assert failed.error["class"] == "InvalidPayload"
+      assert Writer.os_pid(writer) == nil
+    end
+
+    test "the writer is stopped before every CLI job", %{q: q} do
+      writer = start_writer()
+      diary = enqueue(q, "diary_write", %{"agent_name" => "a", "entry" => "synthetic"})
+      start_worker(q, writer: writer)
+      await_state(diary.id, :succeeded)
+      old = Writer.os_pid(writer)
+      assert is_integer(old)
+
+      test = self()
+
+      stub(Butler.CLIMock, :run, fn _argv, _opts ->
+        send(
+          test,
+          {:writer_during_cli, Writer.os_pid(writer), File.exists?("/proc/#{old}")}
+        )
+
+        ok_result()
+      end)
+
+      job = mine(q, "after-write")
+      await_state(job.id, :succeeded)
+      assert_received {:writer_during_cli, nil, false}
+    end
   end
 
   defp restarted?(old_queue, old_worker) do

@@ -28,7 +28,7 @@ defmodule Butler.Jobs.Kinds do
   @modes ~w(projects convos extract)
   @extract_strategies ~w(exchange general)
 
-  @kinds ~w(mine sweep sync repair compress migrate-wings)
+  @kinds ~w(mine sweep sync repair compress migrate-wings diary_write mcp_tool)
   @idempotent_kinds ~w(mine sweep sync)
 
   @default_timeouts_ms %{
@@ -37,7 +37,9 @@ defmodule Butler.Jobs.Kinds do
     "sync" => 3_600_000,
     "repair" => 6 * 3_600_000,
     "compress" => 6 * 3_600_000,
-    "migrate-wings" => 6 * 3_600_000
+    "migrate-wings" => 6 * 3_600_000,
+    "diary_write" => 600_000,
+    "mcp_tool" => 600_000
   }
 
   # Belt and braces next to `--direct`: a command that forgets the flag must

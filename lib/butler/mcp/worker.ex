@@ -94,12 +94,13 @@ defmodule Butler.MCP.Worker do
   @doc """
   Forwards the JSON-RPC `request` to the backend and waits for its answer.
 
-  The answer keeps the id of `request`.
+  The answer keeps the id of `request`. `opts[:timeout_ms]` overrides the
+  request timeout of the worker for this call.
   """
-  @spec call(GenServer.server(), Protocol.message()) ::
+  @spec call(GenServer.server(), Protocol.message(), keyword()) ::
           {:ok, Protocol.message()} | {:error, call_error()}
-  def call(worker, request) do
-    GenServer.call(worker, {:request, request}, :infinity)
+  def call(worker, request, opts \\ []) do
+    GenServer.call(worker, {:request, request, Keyword.get(opts, :timeout_ms)}, :infinity)
   catch
     :exit, _reason -> {:error, :worker_unavailable}
   end
@@ -156,15 +157,23 @@ defmodule Butler.MCP.Worker do
   end
 
   @impl GenServer
-  def handle_call({:request, request}, from, %{phase: :ready} = state) do
+  def handle_call({:request, request, timeout}, from, %{phase: :ready} = state) do
     internal_id = state.next_id
     write(state, Protocol.with_id(request, internal_id))
-    timer = Process.send_after(self(), {:request_timeout, internal_id}, state.request_timeout)
+
+    timer =
+      Process.send_after(
+        self(),
+        {:request_timeout, internal_id},
+        timeout || state.request_timeout
+      )
+
     pending = Map.put(state.pending, internal_id, {from, Map.get(request, "id"), timer})
     {:noreply, %{state | next_id: internal_id + 1, pending: pending}}
   end
 
-  def handle_call({:request, _request}, _from, state), do: {:reply, {:error, :not_ready}, state}
+  def handle_call({:request, _request, _timeout}, _from, state),
+    do: {:reply, {:error, :not_ready}, state}
 
   def handle_call(:info, _from, state) do
     info = %{phase: state.phase, os_pid: state.os_pid, pending: map_size(state.pending)}

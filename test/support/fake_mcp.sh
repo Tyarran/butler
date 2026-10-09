@@ -13,6 +13,17 @@
 #   slow           answers after 0.4 s (concurrently with other requests)
 #   noisy          prints a non-JSON line, then answers
 #   big            answers with a ~200 KB payload
+#   tools/call     answers according to the tool "name" (synthetic outcomes):
+#                    fake_ok          success JSON text
+#                    fake_success_false / fake_error_key   failure JSON texts
+#                    fake_is_error    result with isError true
+#                    fake_rpc_error   JSON-RPC error (-32603)
+#                    fake_lock        JSON-RPC error -32001 peer_contention
+#                    fake_lock_text   success-shaped text with the lock refusal
+#                    fake_hang        never answers
+#                    fake_env         echoes MEMPALACE_MCP_IDLE_HOURS
+#                    anything else    {"success":true,"tool":<name>,"pid":<pid>}
+#                  every call appends its tool name to $FAKE_MCP_CALL_LOG if set.
 #   anything else  answers {"pid": <os pid>, "method": <method>}
 
 case "${1:-normal}" in
@@ -31,6 +42,26 @@ while IFS= read -r line; do
       reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"fake-mcp\",\"version\":\"0\"}}}"
       ;;
     notifications/*) ;;
+    tools/call)
+      tool=$(printf '%s' "$line" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p' 2>/dev/null)
+      [ -n "${FAKE_MCP_CALL_LOG:-}" ] && printf '%s\n' "$tool" >> "$FAKE_MCP_CALL_LOG"
+      text() { reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"$1\"}]$2}}"; }
+      case "$tool" in
+        fake_ok) text '{\"success\":true,\"drawer_id\":\"d1\"}' ;;
+        fake_success_false) text '{\"success\":false,\"error\":\"nope\"}' ;;
+        fake_error_key) text '{\"error\":\"bad thing\"}' ;;
+        fake_is_error) text 'tool exploded' ',"isError":true' ;;
+        fake_rpc_error)
+          reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32603,\"message\":\"internal\"}}" ;;
+        fake_lock)
+          reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32001,\"message\":\"Peer MCP writer active\",\"data\":{\"failure_kind\":\"peer_contention\"}}}" ;;
+        fake_lock_text)
+          text 'palace /tmp/p is held by PID 1 (x); wait for it to finish or stop the holder before retrying' ;;
+        fake_hang) ;;
+        fake_env) text '{\"success\":true,\"idle_hours\":\"'"${MEMPALACE_MCP_IDLE_HOURS:-unset}"'\"}' ;;
+        *) text '{\"success\":true,\"tool\":\"'"$tool"'\",\"pid\":'"$$"'}' ;;
+      esac
+      ;;
     crash) exit 1 ;;
     hang) ;;
     slow)

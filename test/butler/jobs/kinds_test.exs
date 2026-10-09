@@ -311,7 +311,7 @@ defmodule Butler.Jobs.KindsArgvTest do
 
   test "kinds, idempotence, timeouts and routing env" do
     assert Enum.sort(Kinds.kinds()) ==
-             Enum.sort(~w(mine sweep sync repair compress migrate-wings))
+             Enum.sort(~w(mine sweep sync repair compress migrate-wings diary_write mcp_tool))
 
     assert Kinds.idempotent_kinds() == ~w(mine sweep sync)
     assert Kinds.idempotent?("mine")

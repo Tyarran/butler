@@ -17,6 +17,7 @@ defmodule Butler.Application do
         {Task.Supervisor, name: Butler.TaskSupervisor},
         Butler.Commands.Direct
       ] ++
+        [Butler.MCP.Writer] ++
         watcher_children() ++
         queue_children() ++
         mcp_children() ++

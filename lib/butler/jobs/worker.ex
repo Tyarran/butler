@@ -28,7 +28,7 @@ defmodule Butler.Jobs.Worker do
 
   Options (mostly for tests): `:name`, `:queue` (default `Butler.Jobs.Queue`),
   `:task_supervisor`, `:timeouts` (kind => ms), `:lock_backoff_ms`,
-  `:grace_ms`, `:blocked_recheck_ms`, `:palace`, `:signal` (`fn os_pid, name`,
+  `:grace_ms`, `:blocked_recheck_ms`, `:palace`, `:writer` (`Butler.MCP.Writer` server), `:signal` (`fn os_pid, name`,
   default `Butler.OSProcess.signal/2`), `:legacy_running?` (zero-arity fun),
   `:proc_root`.
   """
@@ -41,6 +41,7 @@ defmodule Butler.Jobs.Worker do
   alias Butler.Jobs.Orphans
   alias Butler.Jobs.Queue
   alias Butler.Jobs.Runner
+  alias Butler.MCP.Writer
   alias Butler.OSProcess
 
   require Logger
@@ -49,6 +50,7 @@ defmodule Butler.Jobs.Worker do
   @default_lock_backoff_s 60
   @blocked_recheck_ms 5_000
   @retry_ms 5_000
+  @mcp_kinds ~w(mcp_tool diary_write)
   @call_timeout 15_000
 
   @type status :: :booting | :blocked | :idle | :running
@@ -109,6 +111,7 @@ defmodule Butler.Jobs.Worker do
       grace_ms: Keyword.get(opts, :grace_ms, OSProcess.term_grace_ms()),
       recheck_ms: Keyword.get(opts, :blocked_recheck_ms, @blocked_recheck_ms),
       palace: Keyword.get(opts, :palace),
+      writer: Keyword.get(opts, :writer, Writer),
       signal: Keyword.get(opts, :signal, &OSProcess.signal/2),
       legacy_running?: Keyword.get(opts, :legacy_running?, &Legacy.running?/0),
       proc_root: Keyword.get(opts, :proc_root, "/proc"),
@@ -269,15 +272,28 @@ defmodule Butler.Jobs.Worker do
         end
       ] ++ if(state.palace, do: [palace: state.palace], else: [])
 
+    writer = state.writer
+
     task =
       Task.Supervisor.async_nolink(state.task_supervisor, fn ->
-        Runner.CLI.run(job, run_opts)
+        run_job(job, run_opts, writer)
       end)
 
     set_status(
       %{state | job: job, task: task, os_pid: nil, cancelling?: false},
       :running
     )
+  end
+
+  # Write MCP jobs go through the persistent writer. Every other job is a CLI
+  # job: the writer holds the palace lock after a write, so it is stopped (and
+  # gone) before the process starts. This covers maintenance kinds too.
+  defp run_job(%Job{kind: kind} = job, run_opts, writer) when kind in @mcp_kinds,
+    do: Runner.MCP.run(job, [writer: writer] ++ run_opts)
+
+  defp run_job(job, run_opts, writer) do
+    :ok = Writer.stop(writer)
+    Runner.CLI.run(job, run_opts)
   end
 
   defp settle(%{job: %Job{} = job} = state, outcome) do
