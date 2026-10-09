@@ -2,17 +2,21 @@ defmodule Butler.Jobs.Supervisor do
   @moduledoc """
   Supervises Butler's job engine.
 
-  Strategy `:rest_for_one`: the `Butler.Jobs.Queue` comes first, so anything
-  started after it (the serial worker, added in a later phase) restarts when
-  the queue restarts. Only started when `config :butler, start_queue: true`
+  Strategy `:rest_for_one`: the `Butler.Jobs.Queue` comes first, so the
+  `Butler.Jobs.Worker` started after it restarts when the queue restarts. The
+  worker has a 20 s shutdown budget (kill the child, settle the job). Only started when `config :butler, start_queue: true`
   (dormant until the cutover so that no two writers run during development).
   """
 
   use Supervisor
 
   alias Butler.Jobs.Queue
+  alias Butler.Jobs.Worker
 
-  @doc "Starts the supervisor. Options are passed to `Butler.Jobs.Queue`."
+  @doc """
+  Starts the supervisor. Options are passed to `Butler.Jobs.Queue`, except
+  `:worker`, the keyword list given to `Butler.Jobs.Worker`.
+  """
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts \\ []) do
     Supervisor.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -20,7 +24,7 @@ defmodule Butler.Jobs.Supervisor do
 
   @impl Supervisor
   def init(opts) do
-    opts = Keyword.delete(opts, :name)
-    Supervisor.init([{Queue, opts}], strategy: :rest_for_one)
+    {worker_opts, opts} = opts |> Keyword.delete(:name) |> Keyword.pop(:worker, [])
+    Supervisor.init([{Queue, opts}, {Worker, worker_opts}], strategy: :rest_for_one)
   end
 end

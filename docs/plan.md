@@ -185,7 +185,7 @@ field?}}`: 400 `invalid_payload`, 401 `unauthorized`, 403 `forbidden` /
 - **Phase 2 - Queue server + PubSub.** `Jobs.Queue`, `Jobs.Supervisor`. Tests:
   serialization, dedupe (incl. unique-index race), cancel queued, PubSub events.
   Commit: `feat(jobs): add queue server with pubsub events`.
-- **Phase 3 - Kinds, CLI extensions, worker for CLI jobs, orphan reaping.**
+- **Phase 3 - DONE.** Kinds, CLI extensions, worker for CLI jobs, orphan reaping.**
   `git mv`-style move of `commands/args.ex` to `jobs/kinds.ex` (use `jj mv`),
   extend it (`--direct`, env vars, sync apply, maintenance argv); extend
   `Butler.CLI`/`CLI.System` with `:on_start`, `:on_output`, `:max_output_bytes`;

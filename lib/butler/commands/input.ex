@@ -1,7 +1,7 @@
 defmodule Butler.Commands.Input do
   @moduledoc """
   Validates and normalizes form submissions (string params) into the maps
-  accepted by `Butler.Commands.Args`.
+  accepted by `Butler.Jobs.Kinds`.
 
   Each function returns `{:ok, input}` or `{:error, errors}` where `errors`
   maps a field to a human message, ready to feed `Phoenix.Component.to_form/2`.
@@ -15,7 +15,7 @@ defmodule Butler.Commands.Input do
   are simple enough for plain functions.
   """
 
-  alias Butler.Commands.Args
+  alias Butler.Jobs.Kinds
 
   @true_values ~w(true on 1 yes)
 
@@ -26,14 +26,14 @@ defmodule Butler.Commands.Input do
   def mine(params) do
     [
       {:dir, directory(params, :dir, required: true)},
-      {:mode, enum(params, :mode, Args.modes())},
+      {:mode, enum(params, :mode, Kinds.modes())},
       {:wing, text(params, :wing)},
       {:agent, text(params, :agent)},
       {:dry_run, {:ok, boolean(params, :dry_run)}},
       {:limit, positive_integer(params, :limit)},
       {:no_gitignore, {:ok, boolean(params, :no_gitignore)}},
       {:include_ignored, text_list(params, :include_ignored)},
-      {:extract, enum(params, :extract, Args.extract_strategies())},
+      {:extract, enum(params, :extract, Kinds.extract_strategies())},
       {:max_chunks_per_file, positive_integer(params, :max_chunks_per_file)},
       {:redetect_origin, {:ok, boolean(params, :redetect_origin)}}
     ]

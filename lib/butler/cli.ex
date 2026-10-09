@@ -16,6 +16,9 @@ defmodule Butler.CLI do
   @type opts :: [
           timeout: pos_integer(),
           on_output: (String.t() -> any()),
+          on_start: (non_neg_integer() | nil -> any()),
+          max_output_bytes: pos_integer(),
+          env: [{String.t(), String.t()}],
           bin: String.t()
         ]
 
@@ -35,6 +38,11 @@ defmodule Butler.CLI do
     * `:timeout` - milliseconds before the process is killed
       (default `Butler.CLI.System.default_timeout_ms/0`)
     * `:on_output` - called with each output line as it arrives (streaming)
+    * `:on_start` - called once, right after the process is spawned, with its
+      OS pid (so a caller can persist it and kill the process from outside)
+    * `:max_output_bytes` - only the last N bytes of output are kept in the
+      returned `:output` (default `Butler.CLI.System.default_max_output_bytes/0`)
+    * `:env` - extra environment variables for the process, as `{name, value}`
     * `:bin` - executable override (defaults to `Butler.Palace.mempalace_bin/0`)
 
   Returns `{:ok, %{status: status, output: output}}` whenever the process ran

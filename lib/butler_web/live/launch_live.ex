@@ -3,13 +3,13 @@ defmodule ButlerWeb.LaunchLive do
   Launch page: submits jobs to the daemon through the CLI.
 
   Every submission is validated by `Butler.Commands.Input`, built by
-  `Butler.Commands.Args` and sent by `Butler.Commands.Submit`.
+  `Butler.Jobs.Kinds` and sent by `Butler.Commands.Submit`.
   """
   use ButlerWeb, :live_view
 
-  alias Butler.Commands.Args
   alias Butler.Commands.Input
   alias Butler.Commands.Submit
+  alias Butler.Jobs.Kinds
 
   @mine_defaults %{
     "dir" => "",
@@ -33,7 +33,7 @@ defmodule ButlerWeb.LaunchLive do
      |> assign(mine_form: to_form(@mine_defaults, as: :mine))
      |> assign(sweep_form: to_form(%{"target" => ""}, as: :sweep))
      |> assign(sync_form: to_form(%{"wing" => "", "roots" => ""}, as: :sync))
-     |> assign(modes: Args.modes(), extract_strategies: Args.extract_strategies())}
+     |> assign(modes: Kinds.modes(), extract_strategies: Kinds.extract_strategies())}
   end
 
   @impl Phoenix.LiveView

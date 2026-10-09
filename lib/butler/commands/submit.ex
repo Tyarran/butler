@@ -7,7 +7,7 @@ defmodule Butler.Commands.Submit do
 
     * `{:ok, job_id}`
     * `{:error, {:invalid, field}}` / `{:error, {:unknown_option, key}}` -
-      refused by `Butler.Commands.Args`, the CLI is not called;
+      refused by `Butler.Jobs.Kinds`, the CLI is not called;
     * `{:error, {:duplicate, job_id}}` - an identical job is already queued or
       running (its id is returned);
     * `{:error, {:cli, output}}` - the CLI failed, timed out, or printed
@@ -26,9 +26,9 @@ defmodule Butler.Commands.Submit do
   """
 
   alias Butler.CLI
-  alias Butler.Commands.Args
   alias Butler.Daemon.Status
   alias Butler.Jobs.Job
+  alias Butler.Jobs.Kinds
   alias Butler.Jobs.Store
 
   @cli_timeout_ms 30_000
@@ -43,17 +43,17 @@ defmodule Butler.Commands.Submit do
              | {:duplicate, String.t()}
              | {:cli, String.t()}}
 
-  @doc "Submits a `mine` job. See `Butler.Commands.Args.mine/2` for the input."
-  @spec mine(Args.input(), keyword()) :: result()
-  def mine(input, opts \\ []), do: submit("mine", Args.mine(input, opts), input, opts)
+  @doc "Submits a `mine` job. See `Butler.Jobs.Kinds.mine/2` for the input."
+  @spec mine(Kinds.input(), keyword()) :: result()
+  def mine(input, opts \\ []), do: submit("mine", Kinds.mine(input, opts), input, opts)
 
-  @doc "Submits a `sweep` job. See `Butler.Commands.Args.sweep/2` for the input."
-  @spec sweep(Args.input(), keyword()) :: result()
-  def sweep(input, opts \\ []), do: submit("sweep", Args.sweep(input, opts), input, opts)
+  @doc "Submits a `sweep` job. See `Butler.Jobs.Kinds.sweep/2` for the input."
+  @spec sweep(Kinds.input(), keyword()) :: result()
+  def sweep(input, opts \\ []), do: submit("sweep", Kinds.sweep(input, opts), input, opts)
 
-  @doc "Submits a `sync --dry-run` job. See `Butler.Commands.Args.sync/2`."
-  @spec sync(Args.input(), keyword()) :: result()
-  def sync(input, opts \\ []), do: submit("sync", Args.sync(input, opts), input, opts)
+  @doc "Submits a `sync --dry-run` job. See `Butler.Jobs.Kinds.sync/2`."
+  @spec sync(Kinds.input(), keyword()) :: result()
+  def sync(input, opts \\ []), do: submit("sync", Kinds.sync(input, opts), input, opts)
 
   @doc """
   Extracts the job id from the CLI output

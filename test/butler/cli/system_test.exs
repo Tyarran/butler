@@ -68,6 +68,61 @@ defmodule Butler.CLI.SystemTest do
     assert eventually(fn -> not File.dir?("/proc/#{pid}") end), "process #{pid} is still alive"
   end
 
+  test "on_start receives the OS pid before the process finishes", %{dir: dir} do
+    bin = script!(dir, "echo $$\n")
+    parent = self()
+
+    assert {:ok, %{output: pid_line}} =
+             Runner.run([], bin: bin, on_start: &send(parent, {:started, &1}))
+
+    assert_received {:started, os_pid} when is_integer(os_pid)
+    assert String.trim(pid_line) == Integer.to_string(os_pid)
+  end
+
+  test "env adds variables to the process", %{dir: dir} do
+    bin = script!(dir, ~s|echo "$BUTLER_TEST_A/$BUTLER_TEST_B"\n|)
+
+    assert {:ok, %{output: "1/two\n"}} =
+             Runner.run([], bin: bin, env: [{"BUTLER_TEST_A", "1"}, {"BUTLER_TEST_B", "two"}])
+
+    assert {:error, {:invalid_args, _}} = Runner.run([], bin: bin, env: [{"A=B", "x"}])
+    assert {:error, {:invalid_args, _}} = Runner.run([], bin: bin, env: [{"A", 1}])
+  end
+
+  test "keeps only the tail of the output (max_output_bytes) but streams every line", %{dir: dir} do
+    bin = script!(dir, "i=1; while [ $i -le 200 ]; do echo line-$i; i=$((i+1)); done\n")
+    parent = self()
+
+    assert {:ok, %{output: output}} =
+             Runner.run([],
+               bin: bin,
+               max_output_bytes: 100,
+               on_output: &send(parent, {:line, &1})
+             )
+
+    assert byte_size(output) <= 100
+    assert String.ends_with?(output, "line-200\n")
+    refute output =~ "line-1\n"
+    assert_received {:line, "line-1"}
+    assert_received {:line, "line-200"}
+  end
+
+  test "the tail is bounded on timeout and for a line without newline", %{dir: dir} do
+    bin = script!(dir, "head -c 5000 /dev/zero | tr '\\0' x\nsleep 30\n")
+    parent = self()
+
+    assert {:error, {:timeout, partial}} =
+             Runner.run([],
+               bin: bin,
+               timeout: 500,
+               max_output_bytes: 64,
+               on_output: &send(parent, {:line, &1})
+             )
+
+    assert byte_size(partial) <= 64
+    assert_received {:line, long} when byte_size(long) > 64
+  end
+
   test "reports a missing executable" do
     assert {:error, {:executable_not_found, "/nonexistent/mempalace"}} =
              Runner.run(["status"], bin: "/nonexistent/mempalace")

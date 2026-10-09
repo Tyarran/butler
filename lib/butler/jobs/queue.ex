@@ -7,7 +7,7 @@ defmodule Butler.Jobs.Queue do
   (`"butler:queue"`), as `{:job_changed, %Butler.Jobs.Job{}}`.
 
   At startup (and then daily) terminal jobs older than the retention period
-  (`BUTLER_RETENTION_DAYS`, default #{7} days) are pruned.
+  (`BUTLER_RETENTION_DAYS`, default 7 days) are pruned.
   """
 
   use GenServer
@@ -116,6 +116,8 @@ defmodule Butler.Jobs.Queue do
 
   @impl GenServer
   def init(opts) do
+    # Trap exits so that `terminate/2` closes the database on shutdown.
+    Process.flag(:trap_exit, true)
     path = Keyword.get_lazy(opts, :path, &Paths.queue_path/0)
 
     case Store.open(path) do

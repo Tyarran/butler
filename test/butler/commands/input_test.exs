@@ -1,8 +1,8 @@
 defmodule Butler.Commands.InputTest do
   use ExUnit.Case, async: true
 
-  alias Butler.Commands.Args
   alias Butler.Commands.Input
+  alias Butler.Jobs.Kinds
   alias Butler.Test.QueueFixture
 
   setup do
@@ -100,7 +100,7 @@ defmodule Butler.Commands.InputTest do
 
     test "its output is accepted by the argument builder", %{dir: dir} do
       {:ok, input} = Input.mine(%{"dir" => dir, "limit" => "3", "dry_run" => "true"})
-      assert {:ok, _args} = Args.mine(input, palace: "/tmp/p")
+      assert {:ok, _args} = Kinds.mine(input, palace: "/tmp/p")
     end
   end
 
