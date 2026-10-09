@@ -11,8 +11,9 @@ defmodule Butler.Palace do
     * `BUTLER_MEMPALACE_BIN` - `mempalace` executable (default `mempalace`,
       resolved through `PATH`)
     * `MEMPALACE_DAEMON_STATE_ROOT` - daemon state root, same variable as the
-      daemon's (default `<home>/daemon`); it is also inherited by the CLI
-      processes Butler spawns
+      daemon's (default `<home>/daemon`); only used to look for the Python
+      daemon's PID. It is **removed** from the environment of every process
+      Butler spawns (`Butler.OSProcess.port_env/1`)
   """
 
   @default_palace_path "~/.config/mempalace/palace"

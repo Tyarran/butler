@@ -43,14 +43,6 @@ defmodule Butler.Jobs.Kinds do
     "mcp_tool" => 600_000
   }
 
-  # Belt and braces next to `--direct`: a command that forgets the flag must
-  # never auto-start a daemon nor forward to a hub (docs/spikes.md, Q5).
-  @routing_env [
-    {"MEMPALACE_CLI_WRITE_ROUTING", "direct"},
-    {"MEMPALACE_WRITE_ROUTING", "direct"},
-    {"MEMPALACE_HUB_FORWARD", "0"}
-  ]
-
   @mine_options [
     {:mode, "--mode", {:enum, @modes}},
     {:wing, "--wing", :text},
@@ -125,7 +117,7 @@ defmodule Butler.Jobs.Kinds do
 
   @doc "Environment forcing direct write routing on every spawned `mempalace` process."
   @spec routing_env() :: [{String.t(), String.t()}]
-  def routing_env, do: @routing_env
+  defdelegate routing_env, to: Butler.OSProcess
 
   @doc "Allowed values of the `mode` option of `mine`."
   @spec modes() :: [String.t()]

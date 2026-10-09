@@ -245,7 +245,7 @@ defmodule Butler.MCP.Worker do
         :hide,
         {:line, @line_chunk_bytes},
         {:args, args},
-        {:env, Enum.map(env, fn {key, value} -> {~c"#{key}", ~c"#{value}"} end)}
+        {:env, OSProcess.port_env(env)}
       ])
 
     state = %{

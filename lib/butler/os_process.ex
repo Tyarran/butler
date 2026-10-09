@@ -9,6 +9,34 @@ defmodule Butler.OSProcess do
 
   @term_grace_ms 2_000
 
+  # Belt and braces next to `--direct`: a process that forgets the flag must
+  # never auto-start a daemon nor forward to a hub (docs/spikes.md, Q5).
+  @routing_env [
+    {"MEMPALACE_CLI_WRITE_ROUTING", "direct"},
+    {"MEMPALACE_WRITE_ROUTING", "direct"},
+    {"MEMPALACE_HUB_FORWARD", "0"}
+  ]
+
+  # Butler reads it as its own configuration (`Butler.Palace.daemon_root/0`),
+  # but a spawned process must never inherit it and find the Python daemon.
+  @unset_env ["MEMPALACE_DAEMON_STATE_ROOT"]
+
+  @doc "Environment forcing direct write routing on every spawned `mempalace` process."
+  @spec routing_env() :: [{String.t(), String.t()}]
+  def routing_env, do: @routing_env
+
+  @doc """
+  Converts `{name, value}` pairs into the `:env` option of `Port.open/2`.
+
+  The variables of `@unset_env` (`MEMPALACE_DAEMON_STATE_ROOT`) are always
+  removed from the inherited environment, whatever Butler itself was given.
+  """
+  @spec port_env(Enumerable.t()) :: [{charlist(), charlist() | false}]
+  def port_env(env) do
+    Enum.map(env, fn {name, value} -> {String.to_charlist(name), String.to_charlist(value)} end) ++
+      Enum.map(@unset_env, &{String.to_charlist(&1), false})
+  end
+
   @doc "Grace period, in milliseconds, between `SIGTERM` and `SIGKILL`."
   @spec term_grace_ms() :: pos_integer()
   def term_grace_ms, do: @term_grace_ms

@@ -84,7 +84,7 @@ defmodule Butler.CLI.System do
         :stderr_to_stdout,
         :hide,
         {:args, args},
-        {:env, Enum.map(ctx.env, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)}
+        {:env, OSProcess.port_env(ctx.env)}
       ])
 
     # nil when the process already exited (Port.info/2 returns nil for a closed port).

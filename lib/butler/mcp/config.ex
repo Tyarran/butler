@@ -14,6 +14,7 @@ defmodule Butler.MCP.Config do
   The palace served by the backends is always the one of `Butler.Palace`.
   """
 
+  alias Butler.OSProcess
   alias Butler.Palace
 
   @backends [:full, :light]
@@ -82,10 +83,15 @@ defmodule Butler.MCP.Config do
     * `MEMPALACE_MCP_IDLE_HOURS=0` disables MemPalace's own idle-exit
       watchdog: Butler decides when a process is recycled, and a process
       leaving on its own would look like a crash.
+    * the direct write routing variables (`Butler.OSProcess.routing_env/0`),
+      so a backend never auto-starts nor forwards to the Python daemon.
   """
   @spec env() :: %{String.t() => String.t()}
   def env do
-    %{"MEMPALACE_PALACE_PATH" => Palace.path(), "MEMPALACE_MCP_IDLE_HOURS" => "0"}
+    Map.merge(
+      Map.new(OSProcess.routing_env()),
+      %{"MEMPALACE_PALACE_PATH" => Palace.path(), "MEMPALACE_MCP_IDLE_HOURS" => "0"}
+    )
   end
 
   defp get(key, default), do: :mcp |> env() |> Keyword.get(key, default)
