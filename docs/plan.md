@@ -208,7 +208,7 @@ field?}}`: 400 `invalid_payload`, 401 `unauthorized`, 403 `forbidden` /
   cancel that arrives between the writer's `on_start(os_pid)` and the request being sent
   is only acted on once the worker handles `{:os_pid, ...}`; the request may already be
   written, so a `cancelled` write job may still have been applied.
-- **Phase 5 - Maintenance mode + proxy read allowlist.** `Butler.Maintenance` (ETS),
+- **Phase 5 - DONE. Maintenance mode + proxy read allowlist.** `Butler.Maintenance` (ETS),
   `Backend.suspend/resume`, `MCP.suspend/resume`, proxy gating (immediate error
   -32001), read-tool allowlist on `tools/call`. Worker orchestrates enter ->
   drain (<= 30 s) -> suspend -> run -> leave -> resume in an `after`. Tests: no

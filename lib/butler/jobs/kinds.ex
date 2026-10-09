@@ -30,6 +30,7 @@ defmodule Butler.Jobs.Kinds do
 
   @kinds ~w(mine sweep sync repair compress migrate-wings diary_write mcp_tool)
   @idempotent_kinds ~w(mine sweep sync)
+  @maintenance_kinds ~w(repair compress migrate-wings)
 
   @default_timeouts_ms %{
     "mine" => 6 * 3_600_000,
@@ -82,6 +83,14 @@ defmodule Butler.Jobs.Kinds do
   @doc "Kinds that may safely run again after a crash (`recover_running`, shutdown)."
   @spec idempotent_kinds() :: [String.t()]
   def idempotent_kinds, do: @idempotent_kinds
+
+  @doc "Kinds that put the MCP proxy in maintenance mode (dry-runs included)."
+  @spec maintenance_kinds() :: [String.t()]
+  def maintenance_kinds, do: @maintenance_kinds
+
+  @doc "Whether jobs of `kind` gate the MCP proxy while they run."
+  @spec maintenance?(term()) :: boolean()
+  def maintenance?(kind), do: kind in @maintenance_kinds
 
   @doc "Whether jobs of `kind` can be re-run safely."
   @spec idempotent?(String.t()) :: boolean()

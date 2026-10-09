@@ -2,8 +2,11 @@ defmodule Butler.MCPTest do
   # The subsystem registers global names: no concurrency.
   use ExUnit.Case, async: false
 
+  alias Butler.Maintenance
   alias Butler.MCP
+  alias Butler.MCP.BackendSupervisor
   alias Butler.MCP.Sessions
+  alias Butler.MCP.Worker
 
   @fake Path.expand("../support/fake_mcp.sh", __DIR__)
 
@@ -17,6 +20,8 @@ defmodule Butler.MCPTest do
     )
 
     on_exit(fn ->
+      Maintenance.leave()
+
       case previous do
         {:ok, value} -> Application.put_env(:butler, :mcp, value)
         :error -> Application.delete_env(:butler, :mcp)
@@ -186,5 +191,192 @@ defmodule Butler.MCPTest do
 
     assert message =~ "failed to start"
     assert [_full, %{status: :failed}] = MCP.status()
+  end
+
+  defp call_tool(name), do: Map.put(request("tools/call", 7), "params", %{"name" => name})
+
+  defp requests(backend), do: Enum.find(MCP.status(), &(&1.id == backend)).requests
+
+  describe "maintenance gating" do
+    test "every request is refused at once and never reaches a worker" do
+      start_mcp!()
+      session = initialize!(:light)
+      await_all_ready()
+      before = requests(:light)
+
+      Maintenance.enter("job")
+
+      for backend <- [:light, :full], message <- [request("initialize", 1), request("ping", 2)] do
+        assert {:json, %{"id" => id, "error" => %{"code" => -32_001, "message" => text}}} =
+                 MCP.handle(backend, session, message)
+
+        assert id == message["id"]
+        assert text == "Maintenance in progress, retry later"
+      end
+
+      # no session needed, and even a request that would crash the worker
+      assert {:json, %{"error" => %{"code" => -32_001}}} =
+               MCP.handle(:light, nil, request("crash", 3))
+
+      assert {:json, %{"error" => %{"code" => -32_001}}} =
+               MCP.handle(:light, session, call_tool("mempalace_search"))
+
+      assert requests(:light) == before
+      assert Enum.find(MCP.status(), &(&1.id == :light)).errors == 0
+    end
+
+    test "notifications are still acknowledged" do
+      start_mcp!()
+      session = initialize!(:light)
+      Maintenance.enter("job")
+
+      notification = %{"jsonrpc" => "2.0", "method" => "notifications/initialized"}
+      assert MCP.handle(:light, session, notification) == :accepted
+    end
+
+    test "requests flow again once maintenance is left" do
+      start_mcp!()
+      session = initialize!(:light)
+      Maintenance.enter("job")
+      Maintenance.leave()
+
+      assert {:json, %{"result" => %{"method" => "ping"}}} =
+               MCP.handle(:light, session, request("ping", 2))
+    end
+  end
+
+  describe "read allowlist" do
+    test "read tools are forwarded" do
+      start_mcp!()
+      session = initialize!(:light)
+
+      assert {:json, %{"id" => 7, "result" => %{"content" => [%{"text" => text}]}}} =
+               MCP.handle(:light, session, call_tool("mempalace_search"))
+
+      assert text =~ "mempalace_search"
+    end
+
+    test "write, maintenance and unknown tools are refused without reaching a worker" do
+      start_mcp!()
+      session = initialize!(:light)
+      await_all_ready()
+      before = requests(:light)
+
+      names =
+        ["mempalace_add_drawer", "mempalace_diary_write", "mempalace_kg_supersede"] ++
+          ["mempalace_mine", "mempalace_reconnect", "nope", "", nil, 42, %{"x" => 1}]
+
+      for name <- names do
+        assert {:json, %{"id" => 7, "error" => %{"message" => message}}} =
+                 MCP.handle(:light, session, call_tool(name))
+
+        assert message == "write tools must be submitted through the Butler API"
+      end
+
+      no_name = Map.put(request("tools/call", 8), "params", %{})
+
+      assert {:json, %{"error" => %{"message" => "write tools" <> _}}} =
+               MCP.handle(:light, session, no_name)
+
+      assert requests(:light) == before
+    end
+
+    test "other methods are not filtered" do
+      start_mcp!()
+      session = initialize!(:light)
+
+      assert {:json, %{"result" => %{"method" => "tools/list"}}} =
+               MCP.handle(:light, session, request("tools/list", 4))
+    end
+  end
+
+  describe "suspend/0, resume/0 and drain/1" do
+    defp live_os_pids do
+      for %{active: active, standby: standby} <- MCP.status(),
+          view <- [active, standby],
+          view,
+          do: view.os_pid
+    end
+
+    defp worker_children do
+      for backend <- [:full, :light],
+          do: DynamicSupervisor.count_children(BackendSupervisor.workers_name(backend)).active
+    end
+
+    test "suspend stops every worker and OS process, resume starts fresh ones" do
+      start_mcp!()
+      session = initialize!(:light)
+      await_all_ready()
+      os_pids = live_os_pids()
+      assert length(os_pids) == 4
+
+      assert MCP.suspend() == :ok
+
+      assert Enum.all?(MCP.status(), &(&1.status == :suspended and is_nil(&1.active)))
+      assert worker_children() == [0, 0]
+      assert Enum.all?(os_pids, &(not File.exists?("/proc/#{&1}")))
+
+      # idempotent
+      assert MCP.suspend() == :ok
+
+      assert MCP.resume() == :ok
+      assert MCP.resume() == :ok
+      await_all_ready()
+
+      assert {:json, %{"result" => %{"pid" => pid}}} =
+               MCP.handle(:light, session, request("ping", 2))
+
+      refute pid in os_pids
+    end
+
+    test "a checkout while suspended fails at once" do
+      start_mcp!()
+      session = initialize!(:light)
+      await_all_ready()
+      MCP.suspend()
+
+      assert {:json, %{"error" => %{"message" => "Maintenance in progress, retry later"}}} =
+               MCP.handle(:light, session, request("ping", 2))
+    end
+
+    test "drain returns :ok when nothing is in flight" do
+      start_mcp!()
+      await_all_ready()
+      assert MCP.drain(1_000) == :ok
+    end
+
+    test "drain waits for a request in flight, and times out when it hangs" do
+      start_mcp!()
+      session = initialize!(:light)
+      %{active: %{pid: worker}} = await_light_ready()
+
+      task = Task.async(fn -> MCP.handle(:light, session, request("hang", 5)) end)
+      await_pending(worker)
+
+      assert MCP.drain(100) == :timeout
+
+      # suspending cuts the hung request
+      MCP.suspend()
+      assert {:json, %{"error" => _error}} = Task.await(task, 5_000)
+    end
+
+    test "drain is a no-op while the proxy is not running" do
+      assert MCP.drain(10) == :ok
+      assert MCP.suspend() == :ok
+      assert MCP.resume() == :ok
+    end
+
+    defp await_light_ready do
+      await_all_ready()
+      Enum.find(MCP.status(), &(&1.id == :light))
+    end
+
+    defp await_pending(worker, tries \\ 100_000) do
+      cond do
+        Worker.info(worker).pending > 0 -> :ok
+        tries == 0 -> flunk("request never became pending")
+        true -> await_pending(worker, tries - 1)
+      end
+    end
   end
 end

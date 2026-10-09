@@ -12,14 +12,21 @@ defmodule Butler.MCP do
   rotated or replaced under it.
 
   Notifications and responses sent by clients are acknowledged and dropped.
+
+  While `Butler.Maintenance` is active, every request is refused at once with
+  the JSON-RPC error -32001 (no worker is checked out). `tools/call` only
+  forwards the read tools of `Butler.MCP.Tools`; write, maintenance and
+  unknown tools are refused: writes go through the Butler API.
   """
 
+  alias Butler.Maintenance
   alias Butler.MCP.Backend
   alias Butler.MCP.BackendSupervisor
   alias Butler.MCP.Config
   alias Butler.MCP.Demo
   alias Butler.MCP.Protocol
   alias Butler.MCP.Sessions
+  alias Butler.MCP.Tools
   alias Butler.MCP.Worker
 
   @typedoc "What to answer over HTTP."
@@ -30,6 +37,11 @@ defmodule Butler.MCP do
           | {:bad_request, Protocol.message()}
           | :unknown_session
           | :unavailable
+
+  @maintenance_code -32_001
+  @maintenance_message "Maintenance in progress, retry later"
+  @invalid_params -32_602
+  @write_refused "write tools must be submitted through the Butler API"
 
   @type backend_status :: %{
           required(:sessions) => non_neg_integer(),
@@ -92,6 +104,49 @@ defmodule Butler.MCP do
     end
   end
 
+  @doc """
+  Maintenance: waits (at most `timeout` ms) for the requests in flight to
+  end. `:timeout` when some are still pending (the caller goes on and
+  `suspend/0` cuts them).
+  """
+  @spec drain(non_neg_integer()) :: :ok | :timeout
+  def drain(timeout) do
+    if running?() do
+      deadline = System.monotonic_time(:millisecond) + timeout
+
+      results =
+        for backend <- Config.backends() do
+          remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+          backend |> BackendSupervisor.backend_name() |> Backend.drain(remaining)
+        end
+
+      if :timeout in results, do: :timeout, else: :ok
+    else
+      :ok
+    end
+  end
+
+  @doc """
+  Maintenance: stops every proxy worker (and their OS processes) and starts
+  none until `resume/0`. `:ok` when the proxy is not running.
+  """
+  @spec suspend() :: :ok
+  def suspend, do: each_backend(&Backend.suspend/1)
+
+  @doc "Ends the suspension: the backends start fresh workers. Idempotent."
+  @spec resume() :: :ok
+  def resume, do: each_backend(&Backend.resume/1)
+
+  defp each_backend(fun) do
+    if running?() do
+      for backend <- Config.backends(), do: backend |> BackendSupervisor.backend_name() |> fun.()
+    end
+
+    :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
   @doc "Subscribes the caller to `{:mcp_changed, backend}` notifications."
   @spec subscribe() :: :ok | {:error, term()}
   def subscribe, do: Phoenix.PubSub.subscribe(Butler.PubSub, Backend.topic())
@@ -104,17 +159,35 @@ defmodule Butler.MCP do
     {:bad_request, Protocol.invalid_request(request_id(body))}
   end
 
-  defp dispatch(backend, _session_id, {:request, id, "initialize", _params}, _body) do
-    initialize(backend, id)
-  end
-
-  defp dispatch(backend, session_id, {:request, id, _method, _params}, body) do
-    with_session(backend, session_id, id, fn -> forward(backend, id, body) end)
+  # Maintenance: every request (initialize included) is refused at once,
+  # before any session or worker is looked at. Notifications are not gated.
+  defp dispatch(backend, session_id, {:request, id, _method, _params} = request, body) do
+    if Maintenance.active?() do
+      {:json, Protocol.error(id, @maintenance_code, @maintenance_message)}
+    else
+      route(backend, session_id, request, body)
+    end
   end
 
   defp dispatch(backend, session_id, _notification_or_response, _body) do
     with_session(backend, session_id, nil, fn -> :accepted end)
   end
+
+  defp route(backend, _session_id, {:request, id, "initialize", _params}, _body) do
+    initialize(backend, id)
+  end
+
+  defp route(backend, session_id, {:request, id, method, params}, body) do
+    with_session(backend, session_id, id, fn ->
+      if allowed?(method, params),
+        do: forward(backend, id, body),
+        else: {:json, Protocol.error(id, @invalid_params, @write_refused)}
+    end)
+  end
+
+  # Only the read tools reach a worker; the name must be a known string.
+  defp allowed?("tools/call", params), do: Tools.read?(Map.get(params, "name"))
+  defp allowed?(_method, _params), do: true
 
   defp with_session(_backend, nil, id, _fun) do
     {:bad_request, Protocol.error(id, -32_600, "Mcp-Session-Id header is required")}
@@ -159,6 +232,7 @@ defmodule Butler.MCP do
   defp describe({:failed, reason}),
     do: "The MemPalace backend failed to start: #{inspect(reason)}"
 
+  defp describe(:suspended), do: @maintenance_message
   defp describe(:unavailable), do: "The MemPalace backend is still starting"
   defp describe(_other), do: "The MemPalace backend is unavailable"
 

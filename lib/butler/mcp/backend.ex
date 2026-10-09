@@ -33,6 +33,10 @@ defmodule Butler.MCP.Backend do
     * `:degraded` - an active worker, but no ready standby
     * `:failed` - gave up starting workers
 
+    * `:suspended` - maintenance: every worker is stopped (`suspend/2`) and
+      none is started until `resume/1`; checkouts fail with
+      `{:error, :suspended}`
+
   Every change of state broadcasts `{:mcp_changed, id}` on the PubSub topic.
   """
 
@@ -45,7 +49,10 @@ defmodule Butler.MCP.Backend do
   @workers_target 2
   @busy_retry_ms 1_000
 
-  @type status :: :starting | :ready | :degraded | :failed
+  @suspend_timeout_ms 60_000
+  @drain_poll_ms 50
+
+  @type status :: :starting | :ready | :degraded | :failed | :suspended
 
   @typedoc "A live worker, as shown to the UI."
   @type worker_view :: %{
@@ -89,6 +96,7 @@ defmodule Butler.MCP.Backend do
     workers: %{},
     active: nil,
     failed?: false,
+    suspended?: false,
     failures: 0,
     waiters: %{},
     requests: 0,
@@ -117,7 +125,7 @@ defmodule Butler.MCP.Backend do
   timeout.
   """
   @spec checkout(GenServer.server()) ::
-          {:ok, pid()} | {:error, :unavailable | {:failed, term()}}
+          {:ok, pid()} | {:error, :unavailable | :suspended | {:failed, term()}}
   def checkout(server), do: GenServer.call(server, :checkout, :infinity)
 
   @doc "Counts one failed request."
@@ -135,6 +143,51 @@ defmodule Butler.MCP.Backend do
   """
   @spec restart(GenServer.server()) :: :ok
   def restart(server), do: GenServer.call(server, :restart)
+
+  @doc """
+  Waits until no request is in flight on the workers of the backend, at most
+  `timeout` ms. Returns `:timeout` when requests are still pending.
+  """
+  @spec drain(GenServer.server(), non_neg_integer()) :: :ok | :timeout
+  def drain(server, timeout) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_drain(server, deadline)
+  end
+
+  defp do_drain(server, deadline) do
+    snapshot = status(server)
+    pids = for view <- [snapshot.active, snapshot.standby], view, do: view.pid
+
+    cond do
+      Enum.all?(pids, &(pending(&1) == 0)) ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        :timeout
+
+      true ->
+        Process.sleep(@drain_poll_ms)
+        do_drain(server, deadline)
+    end
+  end
+
+  defp pending(pid) do
+    Worker.info(pid).pending
+  catch
+    :exit, _reason -> 0
+  end
+
+  @doc """
+  Maintenance: stops every worker (waiting until their OS processes are
+  gone) and starts none until `resume/1`. Requests in flight fail; waiting
+  checkouts get `{:error, :unavailable}`. Idempotent.
+  """
+  @spec suspend(GenServer.server()) :: :ok
+  def suspend(server), do: GenServer.call(server, :suspend, @suspend_timeout_ms)
+
+  @doc "Ends a suspension: starts fresh workers. Idempotent; resets the failure counter."
+  @spec resume(GenServer.server()) :: :ok
+  def resume(server), do: GenServer.call(server, :resume)
 
   @doc "The PubSub topic backends broadcast on."
   @spec topic() :: String.t()
@@ -172,6 +225,10 @@ defmodule Butler.MCP.Backend do
     {:reply, {:ok, active}, state |> count_request() |> schedule_rotation()}
   end
 
+  def handle_call(:checkout, _from, %{suspended?: true} = state) do
+    {:reply, {:error, :suspended}, state}
+  end
+
   def handle_call(:checkout, _from, %{failed?: true} = state) do
     {:reply, {:error, {:failed, state.last_error}}, state}
   end
@@ -183,6 +240,17 @@ defmodule Butler.MCP.Backend do
   end
 
   def handle_call(:status, _from, state), do: {:reply, snapshot(state), state}
+
+  def handle_call(:suspend, _from, state) do
+    {:reply, :ok, state |> suspend_workers() |> broadcast()}
+  end
+
+  def handle_call(:resume, _from, %{suspended?: false} = state), do: {:reply, :ok, state}
+
+  def handle_call(:resume, _from, state) do
+    state = %{state | suspended?: false, failures: 0, last_error: nil, failed?: false}
+    {:reply, :ok, state |> ensure_workers() |> broadcast()}
+  end
 
   def handle_call(:restart, _from, state) do
     state = %{state | failures: 0, last_error: nil, failed?: false}
@@ -244,6 +312,7 @@ defmodule Butler.MCP.Backend do
 
   # -- workers ----------------------------------------------------------
 
+  defp ensure_workers(%{suspended?: true} = state), do: state
   defp ensure_workers(%{failed?: true} = state), do: state
 
   defp ensure_workers(%{failures: failures, max_failures: max} = state) when failures >= max do
@@ -335,6 +404,21 @@ defmodule Butler.MCP.Backend do
   end
 
   defp fail_if_exhausted(state), do: state
+
+  defp suspend_workers(state) do
+    Enum.each(state.workers, fn {pid, meta} ->
+      Process.demonitor(meta.ref, [:flush])
+      Worker.stop(pid)
+    end)
+
+    Enum.each(state.waiters, fn {_token, {from, timer}} ->
+      Process.cancel_timer(timer)
+      GenServer.reply(from, {:error, :unavailable})
+    end)
+
+    state = cancel_rotation(state)
+    %{state | workers: %{}, active: nil, waiters: %{}, suspended?: true}
+  end
 
   defp replace_all_workers(state) do
     Enum.each(state.workers, fn {pid, meta} ->
@@ -442,6 +526,7 @@ defmodule Butler.MCP.Backend do
     }
   end
 
+  defp status_of(%{suspended?: true}, _standby), do: :suspended
   defp status_of(%{failed?: true}, _standby), do: :failed
   defp status_of(%{active: nil}, _standby), do: :starting
   defp status_of(_state, nil), do: :degraded

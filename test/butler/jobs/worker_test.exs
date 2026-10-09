@@ -8,6 +8,8 @@ defmodule Butler.Jobs.WorkerTest do
   alias Butler.Jobs.Kinds
   alias Butler.Jobs.Queue
   alias Butler.Jobs.Worker
+  alias Butler.Maintenance
+  alias Butler.MCP
   alias Butler.MCP.Writer
 
   @moduletag :tmp_dir
@@ -555,6 +557,218 @@ defmodule Butler.Jobs.WorkerTest do
       job = mine(q, "after-write")
       await_state(job.id, :succeeded)
       assert_received {:writer_during_cli, nil, false}
+    end
+  end
+
+  describe "maintenance mode" do
+    @fake_proxy Path.expand("../../support/fake_mcp.sh", __DIR__)
+
+    setup do
+      previous = Application.fetch_env(:butler, :mcp)
+
+      Application.put_env(:butler, :mcp,
+        idle_rotation_ms: 60_000,
+        startup_timeout_ms: 5_000,
+        backends: %{full: [bin: @fake_proxy], light: [bin: @fake_proxy]}
+      )
+
+      start_supervised!(Butler.MCP.Supervisor)
+      MCP.subscribe()
+      Maintenance.subscribe()
+
+      on_exit(fn ->
+        Maintenance.leave()
+
+        case previous do
+          {:ok, value} -> Application.put_env(:butler, :mcp, value)
+          :error -> Application.delete_env(:butler, :mcp)
+        end
+      end)
+
+      await_proxy_ready()
+      :ok
+    end
+
+    defp await_proxy_ready do
+      if Enum.all?(MCP.status(), &(&1.status == :ready)) and MCP.status() != [] do
+        :ok
+      else
+        receive do
+          {:mcp_changed, _backend} -> await_proxy_ready()
+        after
+          5_000 -> flunk("proxy never ready: #{inspect(MCP.status())}")
+        end
+      end
+    end
+
+    defp ping, do: %{"jsonrpc" => "2.0", "id" => 1, "method" => "ping"}
+
+    defp proxy_session do
+      {:json, _result, session} =
+        MCP.handle(:light, nil, %{"jsonrpc" => "2.0", "id" => 1, "method" => "initialize"})
+
+      session
+    end
+
+    defp proxy_os_pids do
+      for %{active: active, standby: standby} <- MCP.status(),
+          view <- [active, standby],
+          view,
+          do: view.os_pid
+    end
+
+    defp assert_proxy_resumed(session) do
+      refute Maintenance.active?()
+      assert_receive {:maintenance_changed, :inactive}
+      await_proxy_ready()
+      assert {:json, %{"result" => %{"method" => "ping"}}} = MCP.handle(:light, session, ping())
+    end
+
+    for kind <- ~w(repair compress migrate-wings) do
+      test "#{kind} gates the proxy and stops its workers for the whole run", %{q: q} do
+        session = proxy_session()
+        os_pids = proxy_os_pids()
+        assert os_pids != []
+
+        stub(Butler.CLIMock, :run, blocking_cli(self()))
+        job = enqueue(q, unquote(kind), %{})
+        start_worker(q)
+
+        assert_receive {:run, runner, _argv, _opts}, 5_000
+        assert Maintenance.active?()
+        assert_received {:maintenance_changed, :active}
+
+        # no live MCP worker, no request gets through
+        assert Enum.all?(MCP.status(), &(&1.status == :suspended))
+        assert Enum.all?(os_pids, &(not File.exists?("/proc/#{&1}")))
+
+        assert {:json, %{"error" => %{"code" => -32_001}}} =
+                 MCP.handle(:light, session, ping())
+
+        finish(runner, ok_result())
+        await_state(job.id, :succeeded)
+        assert_proxy_resumed(session)
+      end
+    end
+
+    test "a dry-run maintenance job gates too", %{q: q} do
+      stub(Butler.CLIMock, :run, blocking_cli(self()))
+      enqueue(q, "compress", %{"dry_run" => true})
+      start_worker(q)
+
+      assert_receive {:run, runner, argv, _opts}, 5_000
+      assert "--dry-run" in argv
+      assert Maintenance.active?()
+      finish(runner, ok_result())
+      assert_receive {:maintenance_changed, :inactive}
+    end
+
+    test "mine and sweep leave the proxy open", %{q: q} do
+      session = proxy_session()
+      stub(Butler.CLIMock, :run, blocking_cli(self()))
+      mine(q, "reads-allowed")
+      start_worker(q)
+
+      assert_receive {:run, runner, _argv, _opts}, 5_000
+      refute Maintenance.active?()
+      assert Enum.all?(MCP.status(), &(&1.status == :ready))
+
+      assert {:json, %{"result" => %{"method" => "ping"}}} = MCP.handle(:light, session, ping())
+
+      finish(runner, ok_result())
+      assert_receive {:job_changed, %Job{state: :succeeded}}
+      refute_received {:maintenance_changed, _state}
+    end
+
+    test "a failing command leaves maintenance and resumes the proxy", %{q: q} do
+      session = proxy_session()
+      stub(Butler.CLIMock, :run, fn _argv, _opts -> {:ok, %{status: 2, output: "boom"}} end)
+      job = enqueue(q, "repair", %{})
+      start_worker(q)
+
+      await_state(job.id, :failed)
+      assert_proxy_resumed(session)
+    end
+
+    test "a timeout leaves maintenance and resumes the proxy", %{q: q} do
+      session = proxy_session()
+      stub(Butler.CLIMock, :run, fn _argv, _opts -> {:error, {:timeout, "partial"}} end)
+      job = enqueue(q, "repair", %{})
+      start_worker(q)
+
+      failed = await_state(job.id, :failed)
+      assert failed.error["class"] == "Timeout"
+      assert_proxy_resumed(session)
+    end
+
+    @tag :capture_log
+    test "a raising run leaves maintenance and resumes the proxy", %{q: q} do
+      session = proxy_session()
+      stub(Butler.CLIMock, :run, fn _argv, _opts -> raise "synthetic crash" end)
+      job = enqueue(q, "repair", %{})
+      start_worker(q)
+
+      await_state(job.id, :failed)
+      assert_proxy_resumed(session)
+    end
+
+    test "a killed run (no `after`) is cleaned up by the worker", %{q: q} do
+      session = proxy_session()
+      stub(Butler.CLIMock, :run, fn _argv, _opts -> Process.exit(self(), :kill) end)
+      job = enqueue(q, "migrate-wings", %{})
+      start_worker(q)
+
+      await_state(job.id, :failed)
+      assert_proxy_resumed(session)
+    end
+
+    test "a lock-refused maintenance job leaves maintenance too", %{q: q} do
+      session = proxy_session()
+      silent = spawn_link(fn -> Process.sleep(:infinity) end)
+      job = enqueue(q, "repair", %{})
+      start_worker(q, writer: silent, writer_stop_timeout_ms: 50)
+
+      id = job.id
+      assert_receive {:job_changed, %Job{id: ^id, state: :queued, error: %{}}}
+      assert_proxy_resumed(session)
+    end
+
+    test "a stopped worker leaves maintenance", %{q: q} do
+      session = proxy_session()
+      stub(Butler.CLIMock, :run, blocking_cli(self()))
+      enqueue(q, "repair", %{})
+      start_worker(q)
+
+      assert_receive {:run, _runner, _argv, _opts}, 5_000
+      assert Maintenance.active?()
+
+      # the real shutdown path: terminate/2 runs the cleanup
+      stop_supervised!(Worker)
+      assert_proxy_resumed(session)
+    end
+
+    test "the drain gives up after its timeout and the run goes on", %{q: q} do
+      session = proxy_session()
+      %{active: %{pid: worker}} = Enum.find(MCP.status(), &(&1.id == :light))
+      hung = Task.async(fn -> MCP.handle(:light, session, %{ping() | "method" => "hang"}) end)
+      await_pending(worker)
+
+      stub(Butler.CLIMock, :run, blocking_cli(self()))
+      job = enqueue(q, "repair", %{})
+      start_worker(q, drain_timeout_ms: 100)
+
+      assert_receive {:run, runner, _argv, _opts}, 5_000
+      assert {:json, %{"error" => _cut}} = Task.await(hung, 5_000)
+      finish(runner, ok_result())
+      await_state(job.id, :succeeded)
+    end
+
+    defp await_pending(worker, tries \\ 100_000) do
+      cond do
+        MCP.Worker.info(worker).pending > 0 -> :ok
+        tries == 0 -> flunk("request never became pending")
+        true -> await_pending(worker, tries - 1)
+      end
     end
   end
 

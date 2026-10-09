@@ -23,12 +23,21 @@ defmodule Butler.Jobs.Worker do
   idempotent job is put back in `queued` with its attempt refunded, any
   other job becomes `failed` ("interrupted by shutdown").
 
-  PubSub: `{:worker_changed, status}` on `topic/0`; each output line of a job
+  Maintenance kinds (`repair`, `compress`, `migrate-wings`, dry-runs
+  included): the worker turns `Butler.Maintenance` on when it claims the job
+  (the MCP proxy then refuses every request), the run drains the proxy
+  (at most 30 s), stops the writer and suspends the proxy workers, runs the
+  CLI, and always leaves maintenance and resumes the proxy afterwards: in an
+  `after` of the run, and again when the job is settled or the worker stops
+  (crash of the run, shutdown).
+
+  PubSub: `{:worker_changed, status}` and `{:maintenance_changed, state}` on `topic/0`;
+  each output line of a job
   is broadcast as `{:job_output, id, line}` on `"butler:job:<id>"`.
 
   Options (mostly for tests): `:name`, `:queue` (default `Butler.Jobs.Queue`),
   `:task_supervisor`, `:timeouts` (kind => ms), `:lock_backoff_ms`,
-  `:grace_ms`, `:blocked_recheck_ms`, `:palace`, `:writer` (`Butler.MCP.Writer` server), `:writer_stop_timeout_ms`, `:signal` (`fn os_pid, name`,
+  `:grace_ms`, `:blocked_recheck_ms`, `:palace`, `:writer` (`Butler.MCP.Writer` server), `:writer_stop_timeout_ms`, `:drain_timeout_ms` (maintenance, default 30000), `:signal` (`fn os_pid, name`,
   default `Butler.OSProcess.signal/2`), `:legacy_running?` (zero-arity fun),
   `:proc_root`.
   """
@@ -41,6 +50,8 @@ defmodule Butler.Jobs.Worker do
   alias Butler.Jobs.Orphans
   alias Butler.Jobs.Queue
   alias Butler.Jobs.Runner
+  alias Butler.Maintenance
+  alias Butler.MCP
   alias Butler.MCP.Writer
   alias Butler.OSProcess
 
@@ -52,6 +63,7 @@ defmodule Butler.Jobs.Worker do
   @retry_ms 5_000
   @mcp_kinds ~w(mcp_tool diary_write)
   @call_timeout 15_000
+  @default_drain_ms 30_000
 
   @type status :: :booting | :blocked | :idle | :running
 
@@ -113,6 +125,7 @@ defmodule Butler.Jobs.Worker do
       palace: Keyword.get(opts, :palace),
       writer: Keyword.get(opts, :writer, Writer),
       writer_stop_timeout_ms: Keyword.get(opts, :writer_stop_timeout_ms, 30_000),
+      drain_ms: Keyword.get(opts, :drain_timeout_ms, @default_drain_ms),
       signal: Keyword.get(opts, :signal, &OSProcess.signal/2),
       legacy_running?: Keyword.get(opts, :legacy_running?, &Legacy.running?/0),
       proc_root: Keyword.get(opts, :proc_root, "/proc"),
@@ -200,6 +213,7 @@ defmodule Butler.Jobs.Worker do
     state = drain_os_pid(state)
     stop_child(state)
     Task.Supervisor.terminate_child(state.task_supervisor, state.task.pid)
+    leave_maintenance(job)
 
     interrupted = %{class: "Interrupted", message: "interrupted by shutdown"}
 
@@ -273,12 +287,16 @@ defmodule Butler.Jobs.Worker do
         end
       ] ++ if(state.palace, do: [palace: state.palace], else: [])
 
-    writer = {state.writer, state.writer_stop_timeout_ms}
+    ctx = %{
+      writer: state.writer,
+      stop_timeout: state.writer_stop_timeout_ms,
+      drain: state.drain_ms
+    }
+
+    if Kinds.maintenance?(job.kind), do: Maintenance.enter(id)
 
     task =
-      Task.Supervisor.async_nolink(state.task_supervisor, fn ->
-        run_job(job, run_opts, writer)
-      end)
+      Task.Supervisor.async_nolink(state.task_supervisor, fn -> run_job(job, run_opts, ctx) end)
 
     set_status(
       %{state | job: job, task: task, os_pid: nil, cancelling?: false},
@@ -289,13 +307,30 @@ defmodule Butler.Jobs.Worker do
   # Write MCP jobs go through the persistent writer. Every other job is a CLI
   # job: the writer holds the palace lock after a write, so it is stopped (and
   # gone) before the process starts. This covers maintenance kinds too.
-  defp run_job(%Job{kind: kind} = job, run_opts, {writer, _stop_timeout})
-       when kind in @mcp_kinds,
-       do: Runner.MCP.run(job, [writer: writer] ++ run_opts)
+  defp run_job(%Job{kind: kind} = job, run_opts, %{writer: writer}) when kind in @mcp_kinds,
+    do: Runner.MCP.run(job, [writer: writer] ++ run_opts)
 
-  defp run_job(job, run_opts, {writer, stop_timeout}) do
+  # Maintenance: the proxy is already gated (`Maintenance.enter/1`). Drain the
+  # requests in flight, then (as for any CLI job) stop the writer and suspend
+  # the proxy workers. Maintenance is always left and the proxy resumed, on
+  # failure, timeout or crash alike.
+  defp run_job(%Job{} = job, run_opts, ctx) do
+    if Kinds.maintenance?(job.kind) do
+      try do
+        _ = MCP.drain(ctx.drain)
+        run_cli(job, run_opts, ctx, &MCP.suspend/0)
+      after
+        leave_maintenance(job)
+      end
+    else
+      run_cli(job, run_opts, ctx, fn -> :ok end)
+    end
+  end
+
+  defp run_cli(job, run_opts, %{writer: writer, stop_timeout: stop_timeout}, before_run) do
     case Writer.stop(writer, stop_timeout) do
       :ok ->
+        before_run.()
         Runner.CLI.run(job, run_opts)
 
       {:error, reason} ->
@@ -305,7 +340,19 @@ defmodule Butler.Jobs.Worker do
     end
   end
 
+  # Idempotent: the run does it in an `after`, this covers a crashed run.
+  defp leave_maintenance(%Job{kind: kind}) do
+    if Kinds.maintenance?(kind) do
+      Maintenance.leave()
+      MCP.resume()
+    end
+
+    :ok
+  end
+
   defp settle(%{job: %Job{} = job} = state, outcome) do
+    leave_maintenance(job)
+
     case finalize(state, job, outcome) do
       {:ok, _job} -> :ok
       other -> Logger.warning("could not settle job #{job.id}: #{inspect(other)}")
