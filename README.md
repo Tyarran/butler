@@ -210,6 +210,10 @@ shown in both themes.
 |---|---|
 | ![Direct maintenance commands, light](docs/screenshots/maintenance-light.png) | ![Direct maintenance commands, dark](docs/screenshots/maintenance-dark.png) |
 
+| MCP (light) | MCP (dark) |
+|---|---|
+| ![MCP proxy status, light](docs/screenshots/mcp-light.png) | ![MCP proxy status, dark](docs/screenshots/mcp-dark.png) |
+
 ## Documentation
 
 | To... | Read |

@@ -17,7 +17,11 @@ const pages = [
   ["job-detail", null, 1100],
   ["launch", "/launch", 1500],
   ["maintenance", "/maintenance", 800],
+  ["mcp", "/mcp", 700],
 ];
+
+// Optional page names as arguments: `scripts/screenshots.sh mcp jobs`.
+const only = process.argv.slice(2);
 
 const browser = await chromium.launch({ executablePath: chrome, args: ["--no-sandbox"] });
 
@@ -39,6 +43,7 @@ const detailPath = await jobDetailPath();
 
 for (const theme of ["light", "dark"]) {
   for (const [name, path, height] of pages) {
+    if (only.length > 0 && !only.includes(name)) continue;
     const context = await browser.newContext({ viewport: { width: 1400, height } });
     await context.addInitScript((t) => localStorage.setItem("phx:theme", t), theme);
     const page = await context.newPage();

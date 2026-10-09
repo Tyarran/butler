@@ -24,4 +24,4 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 
-PLAYWRIGHT_DIR="$PWD/$work" BASE_URL="http://localhost:$port" node scripts/screenshots.mjs
+PLAYWRIGHT_DIR="$PWD/$work" BASE_URL="http://localhost:$port" node scripts/screenshots.mjs "$@"
