@@ -3,7 +3,10 @@ defmodule Butler.MCP.Tools do
   Allowlists of MemPalace MCP tools (names as of MemPalace 3.10.0, see
   `docs/spikes.md`, Q4).
 
-    * `read_tools/0` - the 19 tools the MCP proxy may forward (decision 11);
+    * `read_tools/0` - the 19 read `mempalace_*` tools plus `palace_query` (the
+      read-only query tool of the `light` backend) the MCP proxy may forward
+      (decision 11). `palace_exec` and `palace_coordinate` write, so they stay
+      out;
     * `write_tools/0` - the tools a queued `mcp_tool` job may call (decision
       12): the 13 `WRITE_TOOLS` of MemPalace plus `mempalace_kg_supersede`,
       which MemPalace leaves unclassified.
@@ -18,7 +21,7 @@ defmodule Butler.MCP.Tools do
     mempalace_get_aaak_spec mempalace_traverse mempalace_find_tunnels mempalace_graph_stats
     mempalace_list_tunnels mempalace_list_hallways mempalace_follow_tunnels mempalace_search
     mempalace_check_duplicate mempalace_get_drawer mempalace_list_drawers mempalace_diary_read
-    mempalace_kg_query mempalace_kg_stats mempalace_kg_timeline
+    mempalace_kg_query mempalace_kg_stats mempalace_kg_timeline palace_query
   )
 
   @write_tools ~w(

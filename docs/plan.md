@@ -56,7 +56,7 @@ at every commit. Edit code with the edit/write tools only.
     `repair`, `compress`, `migrate-wings` are UI-only: HTTP answers
     `403 kind_not_allowed`. The server always uses its own palace path; a client
     `palace_path` is refused.
-11. **MCP proxy reads**: allowlist of the 19 READ tools only; everything else
+11. **MCP proxy reads**: allowlist of the 19 READ tools plus `palace_query` only; everything else
     (write, maintenance, unknown) is refused with "write tools must be submitted
     through the Butler API". The allowlist lives in `Butler.MCP.Tools`.
 12. **Write allowlist for `mcp_tool`**: the 13 `WRITE_TOOLS` plus

@@ -8,7 +8,7 @@ defmodule Butler.MCP.ToolsTest do
     mempalace_get_aaak_spec mempalace_traverse mempalace_find_tunnels mempalace_graph_stats
     mempalace_list_tunnels mempalace_list_hallways mempalace_follow_tunnels mempalace_search
     mempalace_check_duplicate mempalace_get_drawer mempalace_list_drawers mempalace_diary_read
-    mempalace_kg_query mempalace_kg_stats mempalace_kg_timeline
+    mempalace_kg_query mempalace_kg_stats mempalace_kg_timeline palace_query
   )
 
   @write ~w(
@@ -18,9 +18,12 @@ defmodule Butler.MCP.ToolsTest do
     mempalace_hook_settings mempalace_memories_filed_away mempalace_kg_supersede
   )
 
-  test "the read allowlist has exactly the 19 READ tools" do
+  test "the read allowlist is the 19 READ tools plus palace_query" do
     assert Enum.sort(Tools.read_tools()) == Enum.sort(@read)
-    assert length(@read) == 19
+    assert length(@read) == 20
+    assert Tools.read?("palace_query")
+    refute Tools.read?("palace_exec")
+    refute Tools.read?("palace_coordinate")
     assert Tools.read?("mempalace_search")
     assert Tools.read?("mempalace_kg_timeline")
     refute Tools.read?("mempalace_add_drawer")

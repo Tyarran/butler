@@ -143,7 +143,7 @@ processes per backend** over HTTP instead:
 | Route | Backend |
 |---|---|
 | `POST http://localhost:4000/mcp/full` | `mempalace-mcp` (read tools) |
-| `POST http://localhost:4000/mcp/light` | `mempalace-light-mcp` (`palace_query`, `palace_exec`, `palace_coordinate`) |
+| `POST http://localhost:4000/mcp/light` | `mempalace-light-mcp` (only `palace_query` is forwarded; `palace_exec` and `palace_coordinate` are refused) |
 
 It speaks the MCP "Streamable HTTP" transport in its simplest form: one JSON
 request, one JSON answer, an `Mcp-Session-Id` header managed by Butler, no
