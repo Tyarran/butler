@@ -12,12 +12,17 @@ defmodule ButlerWeb.UIComponents do
     succeeded: "badge-success",
     failed: "badge-error",
     cancelled: "badge-neutral",
-    stopped: "badge-neutral"
+    stopped: "badge-neutral",
+    idle: "badge-success",
+    blocked: "badge-error",
+    booting: "badge-info",
+    unavailable: "badge-neutral"
   }
 
   @doc """
   A colored badge for a job state (`:queued`, `:running`, `:succeeded`,
-  `:failed`, `:cancelled`) or a daemon state (`:running`, `:stopped`).
+  `:failed`, `:cancelled`), a worker status (`:idle`, `:running`, `:blocked`,
+  `:booting`, `:unavailable`) or a daemon state (`:running`, `:stopped`).
 
   With `kind={:daemon}` a running state is green instead of amber.
   """

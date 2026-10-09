@@ -151,7 +151,7 @@ defmodule ButlerWeb.MaintenanceLive do
   @impl Phoenix.LiveView
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} active={:maintenance} title="Maintenance">
+    <Layouts.app flash={@flash} active={:maintenance} title="Maintenance" maintenance={@maintenance}>
       <div role="alert" class="alert alert-warning alert-soft">
         <.icon name="hero-exclamation-triangle" class="size-5" />
         <span>

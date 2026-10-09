@@ -50,6 +50,8 @@ defmodule ButlerWeb do
     quote do
       use Phoenix.LiveView
 
+      on_mount ButlerWeb.MaintenanceHook
+
       unquote(html_helpers())
     end
   end

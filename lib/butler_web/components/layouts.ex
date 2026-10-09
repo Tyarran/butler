@@ -11,7 +11,7 @@ defmodule ButlerWeb.Layouts do
   embed_templates "layouts/*"
 
   @nav_items [
-    %{id: :daemon, label: "Daemon", path: "/daemon", icon: "hero-server"},
+    %{id: :worker, label: "Worker", path: "/worker", icon: "hero-server"},
     %{id: :jobs, label: "Jobs", path: "/jobs", icon: "hero-queue-list"},
     %{id: :launch, label: "Launch", path: "/launch", icon: "hero-rocket-launch"},
     %{
@@ -36,7 +36,7 @@ defmodule ButlerWeb.Layouts do
 
   ## Examples
 
-      <Layouts.app flash={@flash} active={:daemon}>
+      <Layouts.app flash={@flash} active={:worker} maintenance={@maintenance}>
         <h1>Content</h1>
       </Layouts.app>
 
@@ -44,6 +44,10 @@ defmodule ButlerWeb.Layouts do
   attr :flash, :map, required: true, doc: "the map of flash messages"
   attr :active, :atom, default: nil, doc: "the id of the active navigation entry"
   attr :title, :string, default: nil, doc: "optional page heading"
+
+  attr :maintenance, :map,
+    default: nil,
+    doc: "`%{job_id: id | nil}` while a maintenance job owns the palace (banner), else nil"
 
   slot :inner_block, required: true
   slot :actions, doc: "optional actions rendered next to the heading"
@@ -65,6 +69,25 @@ defmodule ButlerWeb.Layouts do
 
         <main id="main" class="p-4 sm:p-6 lg:p-8">
           <div class="mx-auto max-w-6xl space-y-6">
+            <div
+              :if={@maintenance}
+              id="maintenance-banner"
+              role="alert"
+              class="alert alert-warning"
+            >
+              <.icon name="hero-wrench-screwdriver" class="size-5" />
+              <span>
+                Maintenance in progress: the MCP proxy refuses every request until it ends.
+                <.link
+                  :if={@maintenance.job_id}
+                  id="maintenance-banner-job"
+                  navigate={~p"/jobs/#{@maintenance.job_id}"}
+                  class="link font-medium"
+                >
+                  View the job
+                </.link>
+              </span>
+            </div>
             <div
               :if={@title || @actions != []}
               class="flex flex-wrap items-center justify-between gap-3"

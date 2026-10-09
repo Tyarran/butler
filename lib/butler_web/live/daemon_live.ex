@@ -110,7 +110,7 @@ defmodule ButlerWeb.DaemonLive do
   @impl Phoenix.LiveView
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} active={:daemon} title="Daemon">
+    <Layouts.app flash={@flash} active={:worker} title="Daemon" maintenance={@maintenance}>
       <section id="daemon-state" class="rounded-box border border-base-300 bg-base-100 p-5 shadow-sm">
         <div class="flex flex-wrap items-center gap-3">
           <.status_badge state={@status.state} kind={:daemon} class="badge-lg" />

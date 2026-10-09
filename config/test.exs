@@ -25,8 +25,8 @@ config :phoenix,
 # and every path points to a non-existent location.
 config :butler,
   cli: Butler.CLIMock,
+  start_jobs: false,
   start_watcher: false,
-  start_queue: false,
   start_mcp: false,
   mcp: [
     backends: %{

@@ -19,8 +19,8 @@ defmodule Butler.Application do
       ] ++
         [Butler.Maintenance, Butler.MCP.Writer] ++
         watcher_children() ++
-        queue_children() ++
         mcp_children() ++
+        jobs_children() ++
         [
           # Start to serve requests, typically the last entry
           ButlerWeb.Endpoint
@@ -36,8 +36,9 @@ defmodule Butler.Application do
     if Application.get_env(:butler, :start_watcher, true), do: [Butler.Jobs.Watcher], else: []
   end
 
-  defp queue_children do
-    if Application.get_env(:butler, :start_queue, false), do: [Butler.Jobs.Supervisor], else: []
+  # The job engine (queue + worker) starts after the MCP proxy it gates.
+  defp jobs_children do
+    if Application.get_env(:butler, :start_jobs, true), do: [Butler.Jobs.Supervisor], else: []
   end
 
   defp mcp_children do

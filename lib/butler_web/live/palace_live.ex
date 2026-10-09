@@ -10,7 +10,7 @@ defmodule ButlerWeb.PalaceLive do
   @impl Phoenix.LiveView
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} active={:palace} title="Palace">
+    <Layouts.app flash={@flash} active={:palace} title="Palace" maintenance={@maintenance}>
       <div
         id="palace-placeholder"
         class="rounded-box border border-dashed border-base-300 bg-base-100 p-10 text-center"

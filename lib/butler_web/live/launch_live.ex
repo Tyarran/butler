@@ -118,7 +118,7 @@ defmodule ButlerWeb.LaunchLive do
   @impl Phoenix.LiveView
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} active={:launch} title="Launch">
+    <Layouts.app flash={@flash} active={:launch} title="Launch" maintenance={@maintenance}>
       <p class="text-sm opacity-70">
         Jobs are submitted to the daemon through the <code>mempalace</code>
         CLI and run in the background. If the daemon is stopped, the CLI starts it.

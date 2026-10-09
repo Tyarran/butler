@@ -83,7 +83,7 @@ defmodule ButlerWeb.MCPLive do
   @impl Phoenix.LiveView
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} active={:mcp} title="MCP">
+    <Layouts.app flash={@flash} active={:mcp} title="MCP" maintenance={@maintenance}>
       <p :if={@backends == []} id="mcp-disabled" class="text-sm opacity-70">
         The MCP proxy is not running (disabled with <code>BUTLER_MCP_ENABLED=false</code>).
       </p>

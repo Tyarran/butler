@@ -57,7 +57,12 @@ defmodule ButlerWeb.JobLive do
   @impl Phoenix.LiveView
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} active={:jobs} title={if @job, do: "Job", else: "Job not found"}>
+    <Layouts.app
+      flash={@flash}
+      active={:jobs}
+      title={if @job, do: "Job", else: "Job not found"}
+      maintenance={@maintenance}
+    >
       <:actions>
         <.link navigate={~p"/jobs"} class="btn btn-sm">
           <.icon name="hero-arrow-left" class="size-4" /> Jobs

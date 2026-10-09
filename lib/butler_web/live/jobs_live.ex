@@ -159,7 +159,7 @@ defmodule ButlerWeb.JobsLive do
   @impl Phoenix.LiveView
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} active={:jobs} title="Jobs">
+    <Layouts.app flash={@flash} active={:jobs} title="Jobs" maintenance={@maintenance}>
       <p :if={!@queue?} class="text-sm opacity-70">No queue database found for this palace yet.</p>
 
       <div :if={@queue?} id="job-filters" class="space-y-2">

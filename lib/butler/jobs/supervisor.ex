@@ -4,8 +4,11 @@ defmodule Butler.Jobs.Supervisor do
 
   Strategy `:rest_for_one`: the `Butler.Jobs.Queue` comes first, so the
   `Butler.Jobs.Worker` started after it restarts when the queue restarts. The
-  worker has a 20 s shutdown budget (kill the child, settle the job). Only started when `config :butler, start_queue: true`
-  (dormant until the cutover so that no two writers run during development).
+  worker has a 20 s shutdown budget (kill the child, settle the job). It is
+  always started by `Butler.Application`, except in the test environment
+  (`config :butler, start_jobs: false`: tests start their own engine in a
+  throwaway state dir). The worker itself stays `:blocked` while the legacy
+  Python daemon is alive, so that two writers never share a palace.
   """
 
   use Supervisor

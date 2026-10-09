@@ -50,6 +50,7 @@ defmodule ButlerWeb.Router do
     live "/maintenance", MaintenanceLive
     live "/mcp", MCPLive
     live "/palace", PalaceLive
+    live "/worker", WorkerLive
   end
 
   # Enable LiveDashboard in development
