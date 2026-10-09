@@ -1,162 +1,113 @@
 defmodule Butler.Commands.Submit do
   @moduledoc """
-  Submits `mine`, `sweep` and `sync` (dry run) jobs to the daemon through the
-  CLI (`... --daemon --background`) and returns the new job id.
+  Submits jobs of the dashboard forms to Butler's own queue.
+
+  The validated form input (`Butler.Commands.Input`) is turned into a job
+  payload, checked by `Butler.Jobs.Kinds.validate_payload/2` (the very rules
+  the worker applies) and enqueued with `Butler.Jobs.enqueue/3`. Nothing is
+  executed here: the serial worker runs the job later.
 
   Results:
 
-    * `{:ok, job_id}`
-    * `{:error, {:invalid, field}}` / `{:error, {:unknown_option, key}}` -
-      refused by `Butler.Jobs.Kinds`, the CLI is not called;
-    * `{:error, {:duplicate, job_id}}` - an identical job is already queued or
-      running (its id is returned);
-    * `{:error, {:cli, output}}` - the CLI failed, timed out, or printed
-      something unexpected.
+    * `{:ok, job}` - the job is queued;
+    * `{:error, {:duplicate, job}}` - an identical job is already queued or
+      running (it is returned);
+    * `{:error, {:invalid, field, message}}` / `{:error, :unknown_kind}` -
+      refused by validation, nothing was enqueued;
+    * `{:error, {:unavailable, reason}}` - the job engine does not answer.
 
-  ## About duplicates
+  ## Duplicates
 
-  The CLI does not set a dedupe key on the jobs it submits (only the hooks
-  do), so the daemon never refuses a duplicate: it would simply queue it
-  again. Butler therefore compares the request with the active jobs of the
-  queue, read-only, *before* calling the CLI. It is a best-effort check: a job
-  submitted at the same instant by another client can still slip through.
+  Every submission carries a `dedupe_key` derived from its kind and payload
+  (`ui:<kind>:<hash>`), so that the queue's unique index refuses to queue the
+  same work twice while it is still queued or running. API clients use their
+  own keys.
 
-  > #### The CLI may start the daemon {: .info}
-  > `mempalace ... --daemon` starts the daemon when it is not running.
+  ## Sync
+
+  `sync/2` is a dry run unless called with `apply: true`; the form asks for a
+  confirmation first. Applying needs a wing or roots (validated by `Kinds`).
   """
 
-  alias Butler.CLI
-  alias Butler.Daemon.Status
+  alias Butler.Jobs
   alias Butler.Jobs.Job
-  alias Butler.Jobs.Kinds
-  alias Butler.Jobs.Store
 
-  @cli_timeout_ms 30_000
-  @job_id_pattern ~r/^Submitted daemon job ([0-9A-Za-z_-]+) \(\w+\)\s*$/m
-  @active_states [:queued, :running]
-
+  @type input :: %{optional(atom()) => term()}
   @type result ::
-          {:ok, String.t()}
+          {:ok, Job.t()}
           | {:error,
-             {:invalid, atom()}
-             | {:unknown_option, atom()}
-             | {:duplicate, String.t()}
-             | {:cli, String.t()}}
+             {:duplicate, Job.t()}
+             | {:invalid, String.t() | nil, String.t()}
+             | :unknown_kind
+             | {:unavailable, term()}}
 
-  @doc "Submits a `mine` job. See `Butler.Jobs.Kinds.mine/2` for the input."
-  @spec mine(Kinds.input(), keyword()) :: result()
-  def mine(input, opts \\ []), do: submit("mine", Kinds.mine(input, opts), input, opts)
+  @mine_keys ~w(mode wing agent dry_run limit no_gitignore include_ignored extract
+                max_chunks_per_file redetect_origin)a
 
-  @doc "Submits a `sweep` job. See `Butler.Jobs.Kinds.sweep/2` for the input."
-  @spec sweep(Kinds.input(), keyword()) :: result()
-  def sweep(input, opts \\ []), do: submit("sweep", Kinds.sweep(input, opts), input, opts)
+  @doc "Queues a `mine` job from the validated `Butler.Commands.Input.mine/1` input."
+  @spec mine(input()) :: result()
+  def mine(input) do
+    payload = input |> Map.take(@mine_keys) |> Map.put(:source, input[:dir])
+    submit("mine", payload)
+  end
 
-  @doc "Submits a `sync --dry-run` job. See `Butler.Jobs.Kinds.sync/2`."
-  @spec sync(Kinds.input(), keyword()) :: result()
-  def sync(input, opts \\ []), do: submit("sync", Kinds.sync(input, opts), input, opts)
+  @doc "Queues a `sweep` job from the validated `Butler.Commands.Input.sweep/1` input."
+  @spec sweep(input()) :: result()
+  def sweep(input), do: submit("sweep", Map.take(input, [:target]))
 
   @doc """
-  Extracts the job id from the CLI output
-  (`Submitted daemon job <id> (<kind>)`).
+  Queues a `sync` job from the validated `Butler.Commands.Input.sync/1` input.
+
+  A dry run, unless `apply: true` is given.
   """
-  @spec parse_job_id(String.t()) :: {:ok, String.t()} | :error
-  def parse_job_id(output) do
-    case Regex.run(@job_id_pattern, output) do
-      [_, id] -> {:ok, id}
-      _ -> :error
+  @spec sync(input(), keyword()) :: result()
+  def sync(input, opts \\ []) do
+    payload =
+      input |> Map.take([:wing, :roots]) |> Map.put(:dry_run, !Keyword.get(opts, :apply, false))
+
+    submit("sync", payload)
+  end
+
+  @doc """
+  Queues a maintenance job (`repair`, `compress` or `migrate-wings`).
+
+  Options: `:dry_run` (default false) and, for `compress`, `:wing`.
+  """
+  @spec maintenance(String.t(), keyword()) :: result()
+  def maintenance(kind, opts \\ []) do
+    payload = %{dry_run: Keyword.get(opts, :dry_run, false), wing: Keyword.get(opts, :wing)}
+    submit(kind, payload)
+  end
+
+  defp submit(kind, payload) do
+    payload = compact(payload)
+
+    case Jobs.enqueue(kind, payload, dedupe_key: dedupe_key(kind, payload)) do
+      {:ok, job, :created} -> {:ok, job}
+      {:ok, job, :deduplicated} -> {:error, {:duplicate, job}}
+      {:error, {:queue_unavailable, reason}} -> {:error, {:unavailable, reason}}
+      {:error, _reason} = error -> error
     end
   end
 
-  defp submit(kind, built, input, opts) do
-    with {:ok, args} <- built,
-         :ok <- check_duplicate(kind, input, opts) do
-      run(args)
-    end
+  # Blank optional values are not part of the payload (`dry_run: false` of a
+  # sync is kept: it is how `--apply` is asked for).
+  defp compact(payload) do
+    payload
+    |> Enum.reject(fn {key, value} -> blank?(key, value) end)
+    |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
   end
 
-  defp run(args) do
-    case CLI.run(args, timeout: @cli_timeout_ms) do
-      {:ok, %{status: 0, output: output}} -> parse_output(output)
-      {:ok, %{output: output}} -> {:error, {:cli, output}}
-      {:error, reason} -> {:error, {:cli, describe(reason)}}
-    end
+  defp blank?(:dry_run, value), do: is_nil(value)
+  defp blank?(_key, value), do: value in [nil, "", false, []]
+
+  defp dedupe_key(kind, payload) do
+    hash =
+      :sha256
+      |> :crypto.hash(:erlang.term_to_binary({kind, payload}, [:deterministic]))
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 32)
+
+    "ui:#{kind}:#{hash}"
   end
-
-  defp parse_output(output) do
-    case parse_job_id(output) do
-      {:ok, id} -> {:ok, id}
-      :error -> {:error, {:cli, output}}
-    end
-  end
-
-  defp describe({:timeout, partial}), do: "The command timed out. #{partial}"
-  defp describe({:executable_not_found, bin}), do: "Executable not found: #{bin}"
-  defp describe(other), do: inspect(other)
-
-  defp check_duplicate(kind, input, opts) do
-    path = Keyword.get_lazy(opts, :queue_path, fn -> Status.resolve().queue_path end)
-
-    with path when is_binary(path) <- path,
-         {:ok, jobs} <- Store.list(path, limit: 1_000),
-         %Job{id: id} <- Enum.find(jobs, &identical?(kind, input, &1)) do
-      {:error, {:duplicate, id}}
-    else
-      _ -> :ok
-    end
-  end
-
-  defp identical?(kind, input, %Job{kind: kind, state: state, payload: %{} = payload})
-       when state in @active_states,
-       do: fingerprint(kind, input) == payload_fingerprint(kind, payload)
-
-  defp identical?(_kind, _input, _job), do: false
-
-  defp fingerprint("mine", input) do
-    %{
-      source: input[:dir],
-      mode: blank(input[:mode]) || "projects",
-      wing: blank(input[:wing]),
-      agent: blank(input[:agent]) || "mempalace",
-      dry_run: input[:dry_run] == true,
-      limit: input[:limit] || 0,
-      no_gitignore: input[:no_gitignore] == true,
-      include_ignored: split_ignored(input[:include_ignored]),
-      extract: blank(input[:extract]) || "exchange",
-      max_chunks_per_file: input[:max_chunks_per_file],
-      redetect_origin: input[:redetect_origin] == true
-    }
-  end
-
-  defp fingerprint("sweep", input), do: %{target: input[:target]}
-
-  defp fingerprint("sync", input),
-    do: %{wing: blank(input[:wing]), roots: List.wrap(input[:roots]), dry_run: true}
-
-  defp payload_fingerprint("mine", p) do
-    %{
-      source: p["source"],
-      mode: blank(p["mode"]) || "projects",
-      wing: blank(p["wing"]),
-      agent: blank(p["agent"]) || "mempalace",
-      dry_run: p["dry_run"] == true,
-      limit: p["limit"] || 0,
-      no_gitignore: p["no_gitignore"] == true,
-      include_ignored: split_ignored(p["include_ignored"]),
-      extract: blank(p["extract"]) || "exchange",
-      max_chunks_per_file: p["max_chunks_per_file"],
-      redetect_origin: p["redetect_origin"] == true
-    }
-  end
-
-  defp payload_fingerprint("sweep", p), do: %{target: p["target"]}
-
-  defp payload_fingerprint("sync", p),
-    do: %{wing: blank(p["wing"]), roots: List.wrap(p["root"]), dry_run: p["dry_run"] == true}
-
-  defp blank(value) when value in [nil, ""], do: nil
-  defp blank(value), do: value
-
-  defp split_ignored(nil), do: []
-  defp split_ignored(list) when is_list(list), do: list
-  defp split_ignored(text) when is_binary(text), do: String.split(text, ",", trim: true)
 end

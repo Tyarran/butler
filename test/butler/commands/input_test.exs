@@ -100,7 +100,8 @@ defmodule Butler.Commands.InputTest do
 
     test "its output is accepted by the argument builder", %{dir: dir} do
       {:ok, input} = Input.mine(%{"dir" => dir, "limit" => "3", "dry_run" => "true"})
-      assert {:ok, _args} = Kinds.mine(input, palace: "/tmp/p")
+      payload = %{"source" => input.dir, "limit" => input.limit, "dry_run" => input.dry_run}
+      assert {:ok, _payload} = Kinds.validate_payload("mine", payload)
     end
   end
 

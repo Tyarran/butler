@@ -4,16 +4,13 @@ defmodule Butler.Jobs.Kinds do
 
   `argv/3` is what the worker runs for a queued job (always `--direct`, see
   `routing_env/0`); it accepts payloads with atom or string keys (decoded
-  `payload_json`). `mine/2`, `sweep/2` and `sync/2` are the legacy builders of
-  `--daemon --background` submissions used by `Butler.Commands.Submit` until
-  the cutover (phase 7), when they go away.
+  `payload_json`). `validate_payload/2` applies the same rules at submit time.
 
-  The builders return **argument lists** (never shell strings) and validate
+  `argv/3` returns **argument lists** (never shell strings) and validates
   every value:
 
-    * unknown options are refused, so there is no way to ask for `--apply`
-      or `--direct`;
-    * `sync` is always forced to `--dry-run`;
+    * unknown options are refused;
+    * `sync` is a dry run unless `dry_run` is explicitly `false`;
     * enumerated values are whitelisted;
     * free text may not start with `-` (it could be parsed as an option) nor
       contain NUL bytes;
@@ -137,52 +134,6 @@ defmodule Butler.Jobs.Kinds do
   @doc "Allowed values of the `extract` option of `mine`."
   @spec extract_strategies() :: [String.t()]
   def extract_strategies, do: @extract_strategies
-
-  @doc """
-  Arguments for `mempalace mine <dir> --daemon --background [...]`.
-
-  Accepted keys: `:dir` (required, absolute), `:mode`, `:wing`, `:agent`,
-  `:dry_run`, `:limit`, `:no_gitignore`, `:include_ignored` (list of paths),
-  `:extract`, `:max_chunks_per_file` and `:redetect_origin`.
-
-  Pass `palace: path` in `opts` to override the configured palace.
-  """
-  @spec mine(input(), keyword()) :: result()
-  def mine(input, opts \\ []) do
-    with :ok <- check_keys(input, [:dir | Enum.map(@mine_options, &elem(&1, 0))]),
-         {:ok, dir} <- required_path(input, :dir),
-         {:ok, rest} <- options(input, @mine_options) do
-      {:ok, base(opts) ++ ["mine", dir, "--daemon", "--background"] ++ rest}
-    end
-  end
-
-  @doc """
-  Arguments for `mempalace sweep <target> --daemon --background`.
-
-  Accepted key: `:target` (required, absolute path to a `.jsonl` file or a
-  directory).
-  """
-  @spec sweep(input(), keyword()) :: result()
-  def sweep(input, opts \\ []) do
-    with :ok <- check_keys(input, [:target]),
-         {:ok, target} <- required_path(input, :target) do
-      {:ok, base(opts) ++ ["sweep", target, "--daemon", "--background"]}
-    end
-  end
-
-  @doc """
-  Arguments for `mempalace sync --daemon --background --dry-run [...]`.
-
-  `--dry-run` is always present and `--apply` can never be produced.
-  Accepted keys: `:wing` and `:roots` (list of absolute paths).
-  """
-  @spec sync(input(), keyword()) :: result()
-  def sync(input, opts \\ []) do
-    with :ok <- check_keys(input, Enum.map(@sync_options, &elem(&1, 0))),
-         {:ok, rest} <- options(input, @sync_options) do
-      {:ok, base(opts) ++ ["sync", "--daemon", "--background", "--dry-run"] ++ rest}
-    end
-  end
 
   @doc """
   Arguments of the `mempalace` process running a job of `kind` with `payload`.
@@ -358,13 +309,6 @@ defmodule Butler.Jobs.Kinds do
   defp normalize(_payload, _allowed), do: {:error, {:invalid, :payload}}
 
   defp base(opts), do: ["--palace", Keyword.get_lazy(opts, :palace, &Palace.path/0)]
-
-  defp check_keys(input, allowed) do
-    case Enum.find(Map.keys(input), &(&1 not in allowed)) do
-      nil -> :ok
-      key -> {:error, {:unknown_option, key}}
-    end
-  end
 
   defp required_path(input, key) do
     case validate(:absolute_path, Map.get(input, key)) do
