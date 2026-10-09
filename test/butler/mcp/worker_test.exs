@@ -135,6 +135,7 @@ defmodule Butler.MCP.WorkerTest do
       worker = start_ready!()
 
       hanging = Task.async(fn -> Worker.call(worker, request("hang", 1)) end)
+      wait_pending(worker, 1)
       assert {:error, {:backend_exited, 1}} = Worker.call(worker, request("crash", 2))
       assert {:error, {:backend_exited, 1}} = Task.await(hanging)
 
@@ -166,7 +167,8 @@ defmodule Butler.MCP.WorkerTest do
     test "fails the requests still in flight" do
       worker = start_ready!()
       hanging = Task.async(fn -> Worker.call(worker, request("hang", 1)) end)
-      _ = Worker.info(worker)
+      # The task's call must have reached the worker before stopping it.
+      wait_pending(worker, 1)
 
       Worker.stop(worker)
 
@@ -187,6 +189,22 @@ defmodule Butler.MCP.WorkerTest do
 
       assert_receive {:DOWN, ^ref, :process, ^worker, :normal}, 5_000
       wait_dead(os_pid)
+    end
+  end
+
+  defp wait_pending(worker, count, tries \\ 500) do
+    case Worker.info(worker) do
+      %{pending: ^count} ->
+        :ok
+
+      _other when tries > 0 ->
+        receive do
+        after
+          10 -> wait_pending(worker, count, tries - 1)
+        end
+
+      _other ->
+        flunk("worker never had #{count} pending request(s)")
     end
   end
 
