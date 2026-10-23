@@ -1,13 +1,20 @@
 defmodule ButlerWeb.Router do
   use ButlerWeb, :router
 
+  # CSP: `'unsafe-inline'` is needed by the inline theme script in the root
+  # layout and by the inline styles LiveView applies; everything else is
+  # same-origin. Kept as a literal so Sobelow can see it.
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
     plug :fetch_live_flash
     plug :put_root_layout, html: {ButlerWeb.Layouts, :root}
     plug :protect_from_forgery
-    plug :put_secure_browser_headers
+
+    plug :put_secure_browser_headers, %{
+      "content-security-policy" =>
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    }
   end
 
   # Job API: loopback + Host + Origin, then the Bearer token, then JSON.

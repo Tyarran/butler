@@ -8,29 +8,23 @@ on:
 permissions:
   contents: read
 
+# A new push to the same ref supersedes the run in progress.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
-    name: Format, lint and test
+  lint:
+    name: Compile, format and lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       MIX_ENV: test
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: jdx/mise-action@v2
-
-      - name: Cache deps and build
-        uses: actions/cache@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: |
-            deps
-            _build
-          key: mix-${{ runner.os }}-${{ hashFiles('mise.toml', 'mix.lock') }}
-          restore-keys: |
-            mix-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: mix deps.get
+          persist-credentials: false
+      - uses: ./.github/actions/setup
 
       - name: Compile (warnings as errors)
         run: mix compile --warnings-as-errors
@@ -38,8 +32,88 @@ jobs:
       - name: Check formatting
         run: mix format --check-formatted
 
+      - name: Check unused dependencies
+        run: mix deps.unlock --check-unused
+
       - name: Credo
         run: mix credo --strict
 
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+
       - name: Test
         run: mix test
+
+  security:
+    name: Security audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+
+      - name: Hex advisories and retired packages
+        run: mix hex.audit
+
+      - name: Dependency vulnerabilities
+        run: mix deps.audit
+
+      # Reviewed findings live in .sobelow-skips; anything new fails the job.
+      - name: Sobelow
+        run: mix sobelow --exit Low --skip
+
+  dialyzer:
+    name: Dialyzer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          extra-cache-paths: priv/plts
+
+      - name: Compile
+        run: mix compile
+
+      - name: Dialyzer
+        run: mix dialyzer --format github
+
+  assets:
+    name: Production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MIX_ENV: prod
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          mix-env: prod
+
+      - name: Compile (warnings as errors)
+        run: mix compile --warnings-as-errors
+
+      - name: Install asset tools
+        run: mix assets.setup
+
+      - name: Build assets
+        run: mix assets.deploy

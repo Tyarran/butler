@@ -93,6 +93,9 @@ defmodule Butler.Jobs.Runner.CLI do
   defp outcome({:error, {:invalid_args, _} = reason}, _timeout),
     do: {:error, %{class: "InvalidPayload", message: inspect(reason)}}
 
+  # Defensive: not part of the `Butler.CLI.error()` contract, so Dialyzer sees
+  # it as unreachable, but a misbehaving implementation must not crash the job.
+  @dialyzer {:no_match, outcome: 2}
   defp outcome({:error, reason}, _timeout),
     do: {:error, %{class: "CLIError", message: inspect(reason)}}
 end

@@ -387,9 +387,10 @@ defmodule Butler.Jobs.Worker do
       other -> Logger.warning("could not settle job #{job.id}: #{inspect(other)}")
     end
 
+    # Before the reset below: `add_cooldown/3` must still see `cancelling?`.
     state
-    |> then(&%{&1 | job: nil, task: nil, os_pid: nil, cancelling?: false})
     |> add_cooldown(job, outcome)
+    |> then(&%{&1 | job: nil, task: nil, os_pid: nil, cancelling?: false})
     |> set_status(:idle)
   end
 

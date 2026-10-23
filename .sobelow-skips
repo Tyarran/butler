@@ -1,0 +1,14 @@
+CI.System: Command Injection via `System` function,lib/butler/os_process.ex:87,4A9C3B2
+Traversal.FileModule: Directory Traversal in `File.chmod`,lib/butler/jobs/store.ex:172,3B6C35A
+Traversal.FileModule: Directory Traversal in `File.chmod`,lib/butler/jobs/store.ex:212,A8C319
+Traversal.FileModule: Directory Traversal in `File.chmod`,lib/butler/paths.ex:54,65EF6CB
+Traversal.FileModule: Directory Traversal in `File.chmod`,lib/butler/token.ex:51,765984D
+Traversal.FileModule: Directory Traversal in `File.mkdir_p`,lib/butler/paths.ex:53,47E799F
+Traversal.FileModule: Directory Traversal in `File.read`,lib/butler/daemon/locator.ex:57,19C4D05
+Traversal.FileModule: Directory Traversal in `File.read`,lib/butler/jobs/orphans.ex:34,52AD04
+Traversal.FileModule: Directory Traversal in `File.read`,lib/butler/token.ex:31,9209F2
+Traversal.FileModule: Directory Traversal in `File.write`,lib/butler/jobs/store.ex:171,322D859
+Traversal.FileModule: Directory Traversal in `File.write`,lib/butler/token.ex:50,26F9896
+Traversal.FileModule: Directory Traversal in `File.write`,lib/butler/token.ex:52,4C96C30
+XSS.Raw: XSS,lib/butler/commands/input.ex:82,6613BAF
+XSS.Raw: XSS,lib/butler/commands/input.ex:134,69C9E02

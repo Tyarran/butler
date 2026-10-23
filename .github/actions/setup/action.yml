@@ -1,0 +1,36 @@
+name: Setup Elixir
+description: >-
+  Install Erlang/Elixir through mise, restore the deps and build caches,
+  fetch dependencies.
+
+inputs:
+  mix-env:
+    description: MIX_ENV the job runs under (part of the build cache key).
+    default: test
+  extra-cache-paths:
+    description: Additional paths to cache, one per line (e.g. Dialyzer PLTs).
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+
+    - name: Cache deps and build
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          deps
+          _build
+          ${{ inputs.extra-cache-paths }}
+        key: >-
+          ${{ format('mix-{0}-{1}-{2}', runner.os, inputs.mix-env,
+          hashFiles('mise.toml', 'mix.lock', 'mix.exs')) }}
+        restore-keys: |
+          mix-${{ runner.os }}-${{ inputs.mix-env }}-
+
+    - name: Install dependencies
+      shell: bash
+      env:
+        MIX_ENV: ${{ inputs.mix-env }}
+      run: mix deps.get
