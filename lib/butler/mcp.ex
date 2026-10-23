@@ -3,8 +3,9 @@ defmodule Butler.MCP do
   Facade of the MCP proxy: the only module the web layer talks to.
 
   The proxy relays MCP messages (JSON-RPC 2.0, "Streamable HTTP" transport,
-  one JSON response per request, no SSE) to long-lived `mempalace-mcp` /
-  `mempalace-light-mcp` processes, so that many agent sessions share them.
+  one JSON response per request, no SSE) to pools of long-lived
+  `mempalace-mcp` / `mempalace-light-mcp` processes (round-robin), so that
+  many agent sessions share them.
 
   Client sessions (`Mcp-Session-Id`) are owned by Butler. The `initialize`
   answer comes from the handshake the backend workers already did, so a
@@ -93,7 +94,7 @@ defmodule Butler.MCP do
     end
   end
 
-  @doc "Forces the rotation of `backend` (see `Butler.MCP.Backend.restart/1`)."
+  @doc "Replaces every process of `backend` now (see `Butler.MCP.Backend.restart/1`)."
   @spec restart(Config.backend()) :: :ok | {:error, :unavailable}
   def restart(backend) do
     cond do

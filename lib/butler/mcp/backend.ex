@@ -2,35 +2,39 @@ defmodule Butler.MCP.Backend do
   @moduledoc """
   State machine of one MCP backend (`:full` or `:light`).
 
-  A backend keeps **two** `Butler.MCP.Worker` processes: the *active* one
-  serves requests, the other one is a *standby*, already warm. Callers
-  `checkout/1` the active worker and talk to it directly, so requests never
-  go through this process.
+  A backend keeps a **pool** of `:pool_size` `Butler.MCP.Worker` processes
+  (`Butler.MCP.Config.pool_size/0`). Callers `checkout/1` a ready worker and
+  talk to it directly, so requests never go through this process. Workers are
+  handed out in **round-robin** order: a Python process handles its requests
+  one after the other, so spreading them is what makes the pool faster than a
+  single process.
 
   ## Rotation
 
-  After `:idle_rotation_ms` without a checkout, the standby becomes the
-  active worker, the old active process is killed (which gives its memory
-  back to the OS) and a new standby is started. The rotation happens even
-  when nobody used the backend.
+  After `:idle_rotation_ms` without a checkout, **every** worker of the pool
+  is replaced at once by fresh ones (which gives the memory of the old
+  processes back to the OS). The rotation happens even when nobody used the
+  backend, and is postponed while a request is in flight. Requests arriving
+  while the new workers start wait for the first ready one. With
+  `idle_rotation_ms: 0` there is no automatic rotation at all; `restart/1`
+  still replaces the whole pool.
 
   ## Crashes and failures
 
-  When the active worker dies, the standby takes over at once and a new
-  standby is started. Requests that were in flight fail immediately; nothing
-  is retried.
+  When a worker dies, only that worker is replaced. Requests that were in
+  flight on it fail immediately; nothing is retried.
 
   Start-up failures (missing binary, exit before the handshake, handshake
   timeout) are counted. After `:max_start_failures` of them in a row, and if
-  no worker is active, the backend is `:failed`: Butler stops retrying and
+  no worker is ready, the backend is `:failed`: Butler stops retrying and
   checkouts fail with `{:error, {:failed, reason}}`. A worker reaching the
   ready state resets the counter, and so does `restart/1`.
 
   ## Status
 
-    * `:starting` - no worker is active yet
-    * `:ready` - an active worker and a ready standby
-    * `:degraded` - an active worker, but no ready standby
+    * `:starting` - no worker is ready yet
+    * `:ready` - all `:pool_size` workers are ready
+    * `:degraded` - some, but not all, workers are ready
     * `:failed` - gave up starting workers
 
     * `:suspended` - maintenance: every worker is stopped (`suspend/2`) and
@@ -46,7 +50,6 @@ defmodule Butler.MCP.Backend do
   alias Butler.MCP.Worker
 
   @default_topic "butler:mcp"
-  @workers_target 2
   @busy_retry_ms 1_000
 
   @suspend_timeout_ms 60_000
@@ -58,19 +61,22 @@ defmodule Butler.MCP.Backend do
   @type worker_view :: %{
           pid: pid(),
           os_pid: non_neg_integer() | nil,
-          started_at: integer()
+          started_at: integer(),
+          phase: :starting | :ready,
+          pending: non_neg_integer()
         }
 
   @type snapshot :: %{
           id: Config.backend() | term(),
           status: status(),
-          active: worker_view() | nil,
-          standby: worker_view() | nil,
+          workers: [worker_view()],
+          pool_size: pos_integer(),
+          ready: non_neg_integer(),
           starting: non_neg_integer(),
           failures: non_neg_integer(),
           last_error: term(),
           next_rotation_at: integer() | nil,
-          idle_rotation_ms: pos_integer(),
+          idle_rotation_ms: non_neg_integer(),
           requests: non_neg_integer(),
           errors: non_neg_integer(),
           rotations: non_neg_integer()
@@ -84,6 +90,7 @@ defmodule Butler.MCP.Backend do
     :pubsub,
     :topic,
     :idle_ms,
+    :pool_size,
     :max_failures,
     :request_timeout_ms,
     :startup_timeout_ms,
@@ -94,7 +101,8 @@ defmodule Butler.MCP.Backend do
     args: [],
     env: %{},
     workers: %{},
-    active: nil,
+    spawned: 0,
+    cursor: 0,
     failed?: false,
     suspended?: false,
     failures: 0,
@@ -108,9 +116,9 @@ defmodule Butler.MCP.Backend do
   Starts a backend.
 
   Options: `:id` and `:worker_supervisor` (required), `:name`, `:bin`,
-  `:args`, `:env`, `:idle_rotation_ms`, `:max_start_failures`,
-  `:request_timeout_ms`, `:startup_timeout_ms` (defaults from
-  `Butler.MCP.Config`), `:topic` and `:pubsub`.
+  `:args`, `:env`, `:pool_size`, `:idle_rotation_ms` (`0`: no rotation),
+  `:max_start_failures`, `:request_timeout_ms`, `:startup_timeout_ms`
+  (defaults from `Butler.MCP.Config`), `:topic` and `:pubsub`.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -119,9 +127,9 @@ defmodule Butler.MCP.Backend do
   end
 
   @doc """
-  Returns the active worker and counts one request.
+  Returns the next ready worker (round-robin) and counts one request.
 
-  While no worker is active yet, the call waits for one, up to the start-up
+  While no worker is ready yet, the call waits for one, up to the start-up
   timeout.
   """
   @spec checkout(GenServer.server()) ::
@@ -137,9 +145,9 @@ defmodule Butler.MCP.Backend do
   def status(server), do: GenServer.call(server, :status)
 
   @doc """
-  Forces a rotation now. When no standby is ready (or when the backend is
-  failed), every worker is replaced by fresh ones. The failure counter is
-  reset.
+  Forces a rotation now: every worker is replaced by fresh ones, even when
+  the automatic rotation is off or the backend is failed. Requests in flight
+  fail. The failure counter is reset.
   """
   @spec restart(GenServer.server()) :: :ok
   def restart(server), do: GenServer.call(server, :restart)
@@ -156,10 +164,9 @@ defmodule Butler.MCP.Backend do
 
   defp do_drain(server, deadline) do
     snapshot = status(server)
-    pids = for view <- [snapshot.active, snapshot.standby], view, do: view.pid
 
     cond do
-      Enum.all?(pids, &(pending(&1) == 0)) ->
+      Enum.all?(snapshot.workers, &(&1.pending == 0)) ->
         :ok
 
       System.monotonic_time(:millisecond) >= deadline ->
@@ -169,12 +176,6 @@ defmodule Butler.MCP.Backend do
         Process.sleep(@drain_poll_ms)
         do_drain(server, deadline)
     end
-  end
-
-  defp pending(pid) do
-    Worker.info(pid).pending
-  catch
-    :exit, _reason -> 0
   end
 
   @doc """
@@ -205,6 +206,7 @@ defmodule Butler.MCP.Backend do
       pubsub: Keyword.get(opts, :pubsub, Butler.PubSub),
       topic: Keyword.get(opts, :topic, @default_topic),
       idle_ms: Keyword.get_lazy(opts, :idle_rotation_ms, &Config.idle_rotation_ms/0),
+      pool_size: Keyword.get_lazy(opts, :pool_size, &Config.pool_size/0),
       max_failures: Keyword.get_lazy(opts, :max_start_failures, &Config.max_start_failures/0),
       request_timeout_ms:
         Keyword.get_lazy(opts, :request_timeout_ms, &Config.request_timeout_ms/0),
@@ -221,22 +223,15 @@ defmodule Butler.MCP.Backend do
   end
 
   @impl GenServer
-  def handle_call(:checkout, _from, %{active: active} = state) when is_pid(active) do
-    {:reply, {:ok, active}, state |> count_request() |> schedule_rotation()}
-  end
-
-  def handle_call(:checkout, _from, %{suspended?: true} = state) do
-    {:reply, {:error, :suspended}, state}
-  end
-
-  def handle_call(:checkout, _from, %{failed?: true} = state) do
-    {:reply, {:error, {:failed, state.last_error}}, state}
-  end
-
   def handle_call(:checkout, from, state) do
-    token = make_ref()
-    timer = Process.send_after(self(), {:waiter_timeout, token}, state.startup_timeout_ms)
-    {:noreply, %{state | waiters: Map.put(state.waiters, token, {from, timer})}}
+    case ready_pids(state) do
+      [] ->
+        checkout_unavailable(from, state)
+
+      ready ->
+        {pid, state} = pick(state, ready)
+        {:reply, {:ok, pid}, state |> count_request() |> schedule_rotation()}
+    end
   end
 
   def handle_call(:status, _from, state), do: {:reply, snapshot(state), state}
@@ -254,15 +249,7 @@ defmodule Butler.MCP.Backend do
 
   def handle_call(:restart, _from, state) do
     state = %{state | failures: 0, last_error: nil, failed?: false}
-
-    state =
-      if state.active && ready_standby(state) do
-        rotate(state, true)
-      else
-        state |> replace_all_workers() |> ensure_workers()
-      end
-
-    {:reply, :ok, broadcast(state)}
+    {:reply, :ok, state |> replace_pool() |> broadcast()}
   end
 
   @impl GenServer
@@ -274,8 +261,9 @@ defmodule Butler.MCP.Backend do
       %{^pid => meta} ->
         workers = Map.put(state.workers, pid, %{meta | phase: :ready, os_pid: os_pid(pid)})
         state = %{state | workers: workers, failures: 0, last_error: nil}
-        state = if state.active, do: state, else: promote(state, pid)
-        {:noreply, state |> ensure_workers() |> broadcast()}
+
+        {:noreply,
+         state |> serve_waiters() |> ensure_workers() |> ensure_rotation() |> broadcast()}
 
       _unknown ->
         {:noreply, state}
@@ -294,7 +282,7 @@ defmodule Butler.MCP.Backend do
   end
 
   def handle_info({:rotate, token}, %{rotation_token: token} = state) do
-    {:noreply, state |> Map.put(:rotation_timer, nil) |> rotate(false) |> broadcast()}
+    {:noreply, state |> Map.put(:rotation_timer, nil) |> rotate() |> broadcast()}
   end
 
   def handle_info({:waiter_timeout, token}, state) do
@@ -310,6 +298,52 @@ defmodule Butler.MCP.Backend do
 
   def handle_info(_message, state), do: {:noreply, state}
 
+  # -- checkout ---------------------------------------------------------
+
+  defp checkout_unavailable(_from, %{suspended?: true} = state) do
+    {:reply, {:error, :suspended}, state}
+  end
+
+  defp checkout_unavailable(_from, %{failed?: true} = state) do
+    {:reply, {:error, {:failed, state.last_error}}, state}
+  end
+
+  defp checkout_unavailable(from, state) do
+    token = make_ref()
+    timer = Process.send_after(self(), {:waiter_timeout, token}, state.startup_timeout_ms)
+    {:noreply, %{state | waiters: Map.put(state.waiters, token, {from, timer})}}
+  end
+
+  # Round-robin. The only place that decides which worker serves a request.
+  defp pick(state, ready) do
+    pid = Enum.at(ready, rem(state.cursor, length(ready)))
+    {pid, %{state | cursor: state.cursor + 1}}
+  end
+
+  # Ready workers, in the order they were started (a stable round-robin).
+  defp ready_pids(state) do
+    state.workers
+    |> Enum.filter(fn {_pid, meta} -> meta.phase == :ready end)
+    |> Enum.sort_by(fn {_pid, meta} -> meta.seq end)
+    |> Enum.map(fn {pid, _meta} -> pid end)
+  end
+
+  defp serve_waiters(%{waiters: waiters} = state) when map_size(waiters) == 0, do: state
+
+  defp serve_waiters(state) do
+    ready = ready_pids(state)
+
+    state =
+      Enum.reduce(state.waiters, state, fn {_token, {from, timer}}, acc ->
+        Process.cancel_timer(timer)
+        {pid, acc} = pick(acc, ready)
+        GenServer.reply(from, {:ok, pid})
+        count_request(acc)
+      end)
+
+    %{state | waiters: %{}}
+  end
+
   # -- workers ----------------------------------------------------------
 
   defp ensure_workers(%{suspended?: true} = state), do: state
@@ -320,11 +354,11 @@ defmodule Butler.MCP.Backend do
   end
 
   defp ensure_workers(state) do
-    Enum.reduce(1..@workers_target//1, state, &spawn_missing_worker/2)
+    Enum.reduce(1..state.pool_size//1, state, &spawn_missing_worker/2)
   end
 
   defp spawn_missing_worker(_slot, state) do
-    if map_size(state.workers) < @workers_target, do: spawn_worker(state), else: state
+    if map_size(state.workers) < state.pool_size, do: spawn_worker(state), else: state
   end
 
   defp spawn_worker(state) do
@@ -343,10 +377,11 @@ defmodule Butler.MCP.Backend do
           phase: :starting,
           os_pid: nil,
           ref: Process.monitor(pid),
+          seq: state.spawned,
           started_at: System.system_time(:millisecond)
         }
 
-        %{state | workers: Map.put(state.workers, pid, meta)}
+        %{state | workers: Map.put(state.workers, pid, meta), spawned: state.spawned + 1}
 
       {:error, reason} ->
         %{state | failures: state.failures + 1, last_error: {:cannot_start, reason}}
@@ -361,38 +396,23 @@ defmodule Butler.MCP.Backend do
       {meta, workers} ->
         Process.demonitor(meta.ref, [:flush])
         state = %{state | workers: workers, last_error: reason}
-        state = if state.active == pid, do: lose_active(state), else: state
         state = if phase == :starting, do: %{state | failures: state.failures + 1}, else: state
 
         state
         |> ensure_workers()
         |> fail_if_exhausted()
+        |> pause_rotation_if_idle_pool()
         |> broadcast()
     end
   end
 
-  defp lose_active(state) do
-    state = cancel_rotation(%{state | active: nil})
-
-    case ready_standby(state) do
-      nil -> state
-      pid -> promote(state, pid)
-    end
+  defp fail_if_exhausted(%{failures: failures, max_failures: max} = state) when failures >= max do
+    if ready_pids(state) == [], do: fail(state), else: state
   end
 
-  defp promote(state, pid) do
-    state = %{state | active: pid} |> schedule_rotation()
+  defp fail_if_exhausted(state), do: state
 
-    Enum.each(state.waiters, fn {_token, {from, timer}} ->
-      Process.cancel_timer(timer)
-      GenServer.reply(from, {:ok, pid})
-    end)
-
-    %{state | waiters: %{}, requests: state.requests + map_size(state.waiters)}
-  end
-
-  defp fail_if_exhausted(%{active: nil, failures: failures, max_failures: max} = state)
-       when failures >= max do
+  defp fail(state) do
     Enum.each(Map.keys(state.workers), &stop_async(state, &1))
 
     Enum.each(state.waiters, fn {_token, {from, timer}} ->
@@ -402,8 +422,6 @@ defmodule Butler.MCP.Backend do
 
     %{cancel_rotation(state) | failed?: true, workers: %{}, waiters: %{}}
   end
-
-  defp fail_if_exhausted(state), do: state
 
   defp suspend_workers(state) do
     Enum.each(state.workers, fn {pid, meta} ->
@@ -417,7 +435,18 @@ defmodule Butler.MCP.Backend do
     end)
 
     state = cancel_rotation(state)
-    %{state | workers: %{}, active: nil, waiters: %{}, suspended?: true}
+    %{state | workers: %{}, waiters: %{}, suspended?: true}
+  end
+
+  # Replaces every worker with a fresh one. Counts a rotation when there was
+  # something to replace.
+  defp replace_pool(state) do
+    rotations = if map_size(state.workers) > 0, do: state.rotations + 1, else: state.rotations
+
+    state
+    |> replace_all_workers()
+    |> Map.put(:rotations, rotations)
+    |> ensure_workers()
   end
 
   defp replace_all_workers(state) do
@@ -426,19 +455,12 @@ defmodule Butler.MCP.Backend do
       stop_async(state, pid)
     end)
 
-    cancel_rotation(%{state | workers: %{}, active: nil})
+    cancel_rotation(%{state | workers: %{}})
   end
 
   defp stop_async(state, pid) do
     {:ok, _pid} = Task.Supervisor.start_child(state.task_supervisor, fn -> Worker.stop(pid) end)
     :ok
-  end
-
-  defp ready_standby(state) do
-    Enum.find_value(state.workers, fn
-      {pid, %{phase: :ready}} when pid != state.active -> pid
-      _other -> nil
-    end)
   end
 
   defp os_pid(pid) do
@@ -447,45 +469,43 @@ defmodule Butler.MCP.Backend do
     :exit, _reason -> nil
   end
 
-  defp busy?(pid) do
-    Worker.info(pid).pending > 0
+  defp pending(pid) do
+    Worker.info(pid).pending
   catch
-    :exit, _reason -> false
+    :exit, _reason -> 0
   end
 
   # -- rotation ---------------------------------------------------------
 
-  defp rotate(state, force?) do
-    standby = ready_standby(state)
+  # Automatic rotation: the whole pool, unless a request is in flight.
+  defp rotate(state) do
+    ready = ready_pids(state)
 
     cond do
-      is_nil(state.active) ->
-        state
-
-      is_nil(standby) ->
-        schedule_rotation(state)
-
-      not force? and busy?(state.active) ->
-        schedule_rotation(state, min(state.idle_ms, @busy_retry_ms))
-
-      true ->
-        swap(state, standby)
+      ready == [] -> schedule_rotation(state)
+      Enum.any?(ready, &(pending(&1) > 0)) -> schedule_rotation(state, @busy_retry_ms)
+      true -> replace_pool(state)
     end
   end
 
-  defp swap(state, standby) do
-    {meta, workers} = Map.pop(state.workers, state.active)
-    Process.demonitor(meta.ref, [:flush])
-    stop_async(state, state.active)
-
-    %{state | workers: workers, active: standby, rotations: state.rotations + 1}
-    |> schedule_rotation()
-    |> ensure_workers()
+  # Arms the timer when workers are ready and none is armed yet.
+  defp ensure_rotation(%{rotation_timer: nil} = state) do
+    if ready_pids(state) == [], do: state, else: schedule_rotation(state)
   end
 
-  defp schedule_rotation(state, delay \\ nil) do
+  defp ensure_rotation(state), do: state
+
+  defp pause_rotation_if_idle_pool(state) do
+    if ready_pids(state) == [], do: cancel_rotation(state), else: state
+  end
+
+  defp schedule_rotation(state, delay \\ nil)
+
+  defp schedule_rotation(%{idle_ms: 0} = state, _delay), do: state
+
+  defp schedule_rotation(state, delay) do
     state = cancel_rotation(state)
-    delay = delay || state.idle_ms
+    delay = if delay, do: min(delay, state.idle_ms), else: state.idle_ms
     token = make_ref()
 
     %{
@@ -508,14 +528,16 @@ defmodule Butler.MCP.Backend do
   defp count_request(state), do: %{state | requests: state.requests + 1}
 
   defp snapshot(state) do
-    standby = ready_standby(state)
+    workers = views(state)
+    ready = Enum.count(workers, &(&1.phase == :ready))
 
     %{
       id: state.id,
-      status: status_of(state, standby),
-      active: view(state, state.active),
-      standby: view(state, standby),
-      starting: Enum.count(state.workers, fn {_pid, meta} -> meta.phase == :starting end),
+      status: status_of(state, ready),
+      workers: workers,
+      pool_size: state.pool_size,
+      ready: ready,
+      starting: length(workers) - ready,
       failures: state.failures,
       last_error: state.last_error,
       next_rotation_at: state.next_rotation_at,
@@ -526,17 +548,24 @@ defmodule Butler.MCP.Backend do
     }
   end
 
-  defp status_of(%{suspended?: true}, _standby), do: :suspended
-  defp status_of(%{failed?: true}, _standby), do: :failed
-  defp status_of(%{active: nil}, _standby), do: :starting
-  defp status_of(_state, nil), do: :degraded
-  defp status_of(_state, _standby), do: :ready
+  defp status_of(%{suspended?: true}, _ready), do: :suspended
+  defp status_of(%{failed?: true}, _ready), do: :failed
+  defp status_of(_state, 0), do: :starting
+  defp status_of(%{pool_size: size}, ready) when ready < size, do: :degraded
+  defp status_of(_state, _ready), do: :ready
 
-  defp view(_state, nil), do: nil
-
-  defp view(state, pid) do
-    meta = Map.fetch!(state.workers, pid)
-    %{pid: pid, os_pid: meta.os_pid, started_at: meta.started_at}
+  defp views(state) do
+    state.workers
+    |> Enum.sort_by(fn {_pid, meta} -> meta.seq end)
+    |> Enum.map(fn {pid, meta} ->
+      %{
+        pid: pid,
+        os_pid: meta.os_pid,
+        started_at: meta.started_at,
+        phase: meta.phase,
+        pending: if(meta.phase == :ready, do: pending(pid), else: 0)
+      }
+    end)
   end
 
   defp broadcast(state) do

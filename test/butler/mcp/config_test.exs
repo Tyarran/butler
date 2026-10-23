@@ -24,10 +24,19 @@ defmodule Butler.MCP.ConfigTest do
 
   test "defaults" do
     assert Config.idle_rotation_ms() == 600_000
+    assert Config.rotation_enabled?()
+    assert Config.pool_size() == 4
     assert Config.max_start_failures() == 3
     assert Config.request_timeout_ms() == 120_000
     assert Config.startup_timeout_ms() == 60_000
     assert Config.session_ttl_ms() == 3_600_000
+  end
+
+  test "a zero idle rotation turns the rotation off" do
+    Application.put_env(:butler, :mcp, idle_rotation_ms: 0, pool_size: 2)
+
+    refute Config.rotation_enabled?()
+    assert Config.pool_size() == 2
   end
 
   test "default binaries are the MemPalace MCP executables" do

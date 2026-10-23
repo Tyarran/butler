@@ -1,7 +1,8 @@
 defmodule ButlerWeb.MCPLive do
   @moduledoc """
-  MCP proxy page: state of each backend (`full`, `light`), time before the
-  next rotation, client sessions, requests, and a forced restart.
+  MCP proxy page: state of each backend (`full`, `light`), its pool of
+  workers, time before the next rotation (or "disabled"), client sessions,
+  requests, and a forced restart.
 
   The page only observes `Butler.MCP`; the proxy works without it. It
   refreshes on every `{:mcp_changed, backend}` notification and once a second
@@ -64,13 +65,11 @@ defmodule ButlerWeb.MCPLive do
   defp uptime(%{started_at: started_at}, now_ms),
     do: Format.duration(max(div(now_ms - started_at, 1_000), 0))
 
-  defp pid_text(nil), do: "—"
   defp pid_text(%{os_pid: nil}), do: "starting…"
   defp pid_text(%{os_pid: os_pid}), do: Integer.to_string(os_pid)
 
-  defp standby_text(%{standby: nil, starting: starting}) when starting > 0, do: "starting…"
-  defp standby_text(%{standby: nil}), do: "—"
-  defp standby_text(%{standby: standby}), do: pid_text(standby)
+  defp rotation_text(%{idle_rotation_ms: 0}, _now_ms), do: "disabled"
+  defp rotation_text(backend, now_ms), do: countdown(backend.next_rotation_at, now_ms)
 
   defp error_text(nil), do: nil
   defp error_text({:exit_status, status}), do: "the process exited with status #{status}"
@@ -79,6 +78,9 @@ defmodule ButlerWeb.MCPLive do
   defp error_text(other), do: inspect(other)
 
   defp badge_class(status), do: Map.get(@badge_classes, status, "badge-ghost")
+
+  defp worker_badge(:ready), do: "badge-success"
+  defp worker_badge(_phase), do: "badge-info"
 
   @impl Phoenix.LiveView
   def render(assigns) do
@@ -128,23 +130,16 @@ defmodule ButlerWeb.MCPLive do
 
         <dl class="mt-4 grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <dt class="text-xs uppercase opacity-60">Active process</dt>
-            <dd id={"active-#{backend.id}"} class="font-mono text-sm">
-              {pid_text(backend.active)}
-              <span :if={backend.active} class="opacity-60">
-                (up {uptime(backend.active, @now_ms)})
-              </span>
+            <dt class="text-xs uppercase opacity-60">Workers ready</dt>
+            <dd id={"pool-#{backend.id}"} class="text-sm tabular-nums">
+              {backend.ready}/{backend.pool_size}
             </dd>
-          </div>
-          <div>
-            <dt class="text-xs uppercase opacity-60">Standby process</dt>
-            <dd id={"standby-#{backend.id}"} class="font-mono text-sm">{standby_text(backend)}</dd>
           </div>
           <div>
             <dt class="text-xs uppercase opacity-60">Next rotation</dt>
             <dd id={"rotation-#{backend.id}"} class="text-sm tabular-nums">
-              {countdown(backend.next_rotation_at, @now_ms)}
-              <span class="opacity-60">
+              {rotation_text(backend, @now_ms)}
+              <span :if={backend.idle_rotation_ms > 0} class="opacity-60">
                 (every {Format.duration(div(backend.idle_rotation_ms, 1_000))} idle)
               </span>
             </dd>
@@ -154,6 +149,20 @@ defmodule ButlerWeb.MCPLive do
             <dd id={"rotations-#{backend.id}"} class="text-sm tabular-nums">{backend.rotations}</dd>
           </div>
         </dl>
+
+        <ul id={"workers-#{backend.id}"} class="mt-4 divide-y divide-base-300 text-sm">
+          <li
+            :for={{worker, index} <- Enum.with_index(backend.workers)}
+            id={"worker-#{backend.id}-#{index}"}
+            class="flex flex-wrap items-center gap-x-6 gap-y-1 py-1.5"
+          >
+            <span class="w-20 font-mono">{pid_text(worker)}</span>
+            <span class={["badge badge-sm", worker_badge(worker.phase)]}>{worker.phase}</span>
+            <span class="tabular-nums opacity-70">up {uptime(worker, @now_ms)}</span>
+            <span class="tabular-nums opacity-70">{worker.pending} in flight</span>
+          </li>
+          <li :if={backend.workers == []} class="py-1.5 opacity-60">No worker running</li>
+        </ul>
 
         <div class="mt-5 grid grid-cols-3 gap-4">
           <.stat_card

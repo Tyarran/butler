@@ -6,8 +6,9 @@ defmodule Butler.MCP.Config do
   environment, which `config/runtime.exs` fills from:
 
     * `BUTLER_MCP_ENABLED` - `false` disables the proxy (default: enabled)
-    * `BUTLER_MCP_ROTATION_MINUTES` - idle delay before a backend process is
-      recycled (default `10`)
+    * `BUTLER_MCP_ROTATION_MINUTES` - idle delay before the processes of a
+      backend are recycled (default `10`, `0` turns the rotation off)
+    * `BUTLER_MCP_POOL_SIZE` - processes per backend (default `4`)
     * `BUTLER_MCP_FULL_BIN` - `mempalace-mcp` executable
     * `BUTLER_MCP_LIGHT_BIN` - `mempalace-light-mcp` executable
 
@@ -20,6 +21,7 @@ defmodule Butler.MCP.Config do
   @backends [:full, :light]
   @default_bins %{full: "mempalace-mcp", light: "mempalace-light-mcp"}
   @default_idle_rotation_ms 600_000
+  @default_pool_size 4
   @default_max_start_failures 3
   @default_request_timeout_ms 120_000
   @default_startup_timeout_ms 60_000
@@ -44,9 +46,20 @@ defmodule Butler.MCP.Config do
   @spec demo?() :: boolean()
   def demo?, do: Application.get_env(:butler, :mcp_demo, false)
 
-  @doc "Idle delay, in milliseconds, after which the active process is rotated."
-  @spec idle_rotation_ms() :: pos_integer()
+  @doc """
+  Idle delay, in milliseconds, after which the processes of a backend are
+  rotated. `0` means the rotation is off.
+  """
+  @spec idle_rotation_ms() :: non_neg_integer()
   def idle_rotation_ms, do: get(:idle_rotation_ms, @default_idle_rotation_ms)
+
+  @doc "Whether idle backends are rotated (`idle_rotation_ms/0` is not `0`)."
+  @spec rotation_enabled?() :: boolean()
+  def rotation_enabled?, do: idle_rotation_ms() > 0
+
+  @doc "Number of processes each backend keeps."
+  @spec pool_size() :: pos_integer()
+  def pool_size, do: get(:pool_size, @default_pool_size)
 
   @doc "Consecutive start failures after which a backend is marked failed."
   @spec max_start_failures() :: pos_integer()

@@ -30,6 +30,7 @@ defmodule ButlerWeb.MCPLiveTest do
       Keyword.merge(
         [
           idle_rotation_ms: 60_000,
+          pool_size: 2,
           startup_timeout_ms: 5_000,
           backends: %{full: [bin: @fake], light: [bin: @fake]}
         ],
@@ -79,10 +80,14 @@ defmodule ButlerWeb.MCPLiveTest do
     for backend <- [:full, :light] do
       assert has_element?(view, "#backend-#{backend}")
       assert has_element?(view, "#status-#{backend}[data-state=ready]")
-      assert has_element?(view, "#active-#{backend}")
-      assert has_element?(view, "#standby-#{backend}")
+      assert has_element?(view, "#pool-#{backend}")
+      assert has_element?(view, "#worker-#{backend}-0")
+      assert has_element?(view, "#worker-#{backend}-1")
+      refute has_element?(view, "#worker-#{backend}-2")
       assert has_element?(view, "#rotation-#{backend}")
     end
+
+    assert view |> element("#pool-light") |> render() =~ "2/2"
 
     assert view |> element("#sessions-light") |> render() =~ ~r/>\s*1\s*</
     assert view |> element("#requests-light") |> render() =~ ~r/>\s*2\s*</
@@ -131,6 +136,10 @@ defmodule ButlerWeb.MCPLiveTest do
 
     assert has_element?(view, "#status-full[data-state=ready]")
     assert has_element?(view, "#status-light[data-state=degraded]")
+    assert view |> element("#pool-full") |> render() =~ "4/4"
+    assert view |> element("#pool-light") |> render() =~ "3/4"
+    assert has_element?(view, "#worker-light-3")
+    assert view |> element("#rotation-light") |> render() =~ "disabled"
 
     view |> element("#btn-restart-full") |> render_click()
     assert render(view) =~ "Restarting full"

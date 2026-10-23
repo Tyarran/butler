@@ -16,8 +16,12 @@ defmodule Butler.MCP.Demo do
       %{
         id: :full,
         status: :ready,
-        active: %{os_pid: 41_207, started_at: now_ms - 3 * @minute},
-        standby: %{os_pid: 41_388, started_at: now_ms - 3 * @minute},
+        workers:
+          for {os_pid, pending} <- [{41_207, 1}, {41_388, 0}, {41_391, 0}, {41_402, 2}] do
+            worker(os_pid, :ready, now_ms - 3 * @minute, pending)
+          end,
+        pool_size: 4,
+        ready: 4,
         starting: 0,
         failures: 0,
         last_error: nil,
@@ -31,18 +35,28 @@ defmodule Butler.MCP.Demo do
       %{
         id: :light,
         status: :degraded,
-        active: %{os_pid: 41_512, started_at: now_ms - 9 * @minute},
-        standby: nil,
+        workers: [
+          worker(41_512, :ready, now_ms - 9 * @minute, 0),
+          worker(41_518, :ready, now_ms - 9 * @minute, 1),
+          worker(41_533, :ready, now_ms - 9 * @minute, 0),
+          worker(nil, :starting, now_ms - 2_000, 0)
+        ],
+        pool_size: 4,
+        ready: 3,
         starting: 1,
         failures: 0,
         last_error: nil,
-        next_rotation_at: now_ms + 55_000,
-        idle_rotation_ms: 10 * @minute,
+        next_rotation_at: nil,
+        idle_rotation_ms: 0,
         requests: 4_212,
         errors: 0,
         rotations: 11,
         sessions: 6
       }
     ]
+  end
+
+  defp worker(os_pid, phase, started_at, pending) do
+    %{os_pid: os_pid, phase: phase, started_at: started_at, pending: pending}
   end
 end

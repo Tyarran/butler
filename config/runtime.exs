@@ -37,12 +37,24 @@ if config_env() != :test do
     daemon_state_root: System.get_env("MEMPALACE_DAEMON_STATE_ROOT")
 
   # MCP proxy (see Butler.MCP.Config). Disabled with BUTLER_MCP_ENABLED=false.
+  # BUTLER_MCP_ROTATION_MINUTES=0 turns the idle rotation off.
   rotation_minutes = String.to_integer(System.get_env("BUTLER_MCP_ROTATION_MINUTES", "10"))
+
+  if rotation_minutes < 0 do
+    raise "BUTLER_MCP_ROTATION_MINUTES must be 0 (off) or a positive number of minutes"
+  end
+
+  pool_size = String.to_integer(System.get_env("BUTLER_MCP_POOL_SIZE", "1"))
+
+  if pool_size < 1 do
+    raise "BUTLER_MCP_POOL_SIZE must be a positive integer"
+  end
 
   config :butler,
     start_mcp: System.get_env("BUTLER_MCP_ENABLED", "true") != "false",
     mcp: [
       idle_rotation_ms: rotation_minutes * 60_000,
+      pool_size: pool_size,
       backends: %{
         full: [bin: System.get_env("BUTLER_MCP_FULL_BIN", "mempalace-mcp")],
         light: [bin: System.get_env("BUTLER_MCP_LIGHT_BIN", "mempalace-light-mcp")]

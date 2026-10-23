@@ -577,6 +577,7 @@ defmodule Butler.Jobs.WorkerTest do
 
       Application.put_env(:butler, :mcp,
         idle_rotation_ms: 60_000,
+        pool_size: 2,
         startup_timeout_ms: 5_000,
         backends: %{full: [bin: @fake_proxy], light: [bin: @fake_proxy]}
       )
@@ -620,10 +621,7 @@ defmodule Butler.Jobs.WorkerTest do
     end
 
     defp proxy_os_pids do
-      for %{active: active, standby: standby} <- MCP.status(),
-          view <- [active, standby],
-          view,
-          do: view.os_pid
+      for %{workers: workers} <- MCP.status(), worker <- workers, do: worker.os_pid
     end
 
     defp assert_proxy_resumed(session) do
@@ -771,9 +769,8 @@ defmodule Butler.Jobs.WorkerTest do
 
     test "the drain gives up after its timeout and the run goes on", %{q: q} do
       session = proxy_session()
-      %{active: %{pid: worker}} = Enum.find(MCP.status(), &(&1.id == :light))
       hung = Task.async(fn -> MCP.handle(:light, session, %{ping() | "method" => "hang"}) end)
-      await_pending(worker)
+      await_pending(:light)
 
       stub(Butler.CLIMock, :run, blocking_cli(self()))
       job = enqueue(q, "repair", %{})
@@ -785,11 +782,14 @@ defmodule Butler.Jobs.WorkerTest do
       await_state(job.id, :succeeded)
     end
 
-    defp await_pending(worker, tries \\ 100_000) do
+    # Round-robin: any worker of the backend may hold the request.
+    defp await_pending(backend, tries \\ 100_000) do
+      %{workers: workers} = Enum.find(MCP.status(), &(&1.id == backend))
+
       cond do
-        MCP.Worker.info(worker).pending > 0 -> :ok
+        Enum.any?(workers, &(&1.pending > 0)) -> :ok
         tries == 0 -> flunk("request never became pending")
-        true -> await_pending(worker, tries - 1)
+        true -> await_pending(backend, tries - 1)
       end
     end
   end

@@ -77,7 +77,7 @@ The job engine starts with the app. Open <http://localhost:4000>:
 | **Jobs** | Follow the queue live, filter by state or kind, cancel queued or running jobs, retry failed or cancelled ones (a confirmation is needed for kinds that are not idempotent). Open a job for its live output, tail, result and error. The payload of `diary_write` and `mcp_tool` jobs is never shown. |
 | **Launch** | Queue `mine`, `sweep` and `sync` jobs. A sync is a dry run; applying it needs a wing or roots and a confirmation. |
 | **Maintenance** | Queue `repair`, `compress` and `migrate-wings` (dry runs included) after a confirmation. Nothing runs from the page: the worker runs the job when its turn comes, and the queue position is shown. |
-| **MCP** | See the state of the MCP proxy backends (`full`, `light`), the time before the next rotation, client sessions and requests; force a restart. |
+| **MCP** | See the state of the MCP proxy backends (`full`, `light`), its pool of workers, the time before the next rotation, client sessions and requests; force a restart. |
 | **Palace** | Placeholder for a future visualization. |
 
 While a maintenance job runs, a banner is shown on every page and the MCP
@@ -122,7 +122,8 @@ read at startup by `config/runtime.exs`:
 | `BUTLER_MEMPALACE_BIN` | `mempalace` | The `mempalace` executable (resolved through `PATH`). |
 | `PORT` | `4000` | HTTP port. |
 | `BUTLER_MCP_ENABLED` | `true` | `false` disables the MCP proxy. |
-| `BUTLER_MCP_ROTATION_MINUTES` | `10` | Idle time after which a backend process is recycled. |
+| `BUTLER_MCP_ROTATION_MINUTES` | `10` | Idle time after which the processes of a backend are recycled. `0` turns the rotation off. |
+| `BUTLER_MCP_POOL_SIZE` | `4` | Processes kept per backend (so `2 ×` this many in total). Read at start-up. |
 | `BUTLER_MCP_FULL_BIN` | `mempalace-mcp` | Executable of the `full` backend (and of the persistent writer). |
 | `BUTLER_MCP_LIGHT_BIN` | `mempalace-light-mcp` | Executable of the `light` backend. |
 
@@ -161,12 +162,19 @@ Point an MCP client at it, for example with the HTTP transport of your agent:
 
 How it works:
 
-- Each backend keeps **two** processes: an active one and a warm standby.
-- After 10 idle minutes (configurable) the standby takes over, the old process
-  is killed (its memory goes back to the system) and a new standby starts. This
-  happens even when nobody uses the proxy.
-- If the active process crashes, the requests in flight get an error right
-  away (nothing is retried) and the standby takes over.
+- Each backend keeps a **pool** of `BUTLER_MCP_POOL_SIZE` processes (4 by
+  default, so 8 Python processes for the two backends: mind your RAM).
+  Requests are handed to the workers in **round-robin** order; a Python
+  process handles one request after the other, so the pool is what lets
+  several agents be served in parallel.
+- After 10 idle minutes (configurable) **all** the processes of a backend are
+  replaced at once (their memory goes back to the system). Requests that
+  arrive meanwhile wait for the first fresh process. This happens even when
+  nobody uses the proxy; `BUTLER_MCP_ROTATION_MINUTES=0` turns it off. The
+  **Restart** button always replaces the whole pool.
+- If a process crashes, the requests in flight on it get an error right away
+  (nothing is retried) and only that process is replaced; the backend is
+  **degraded** until the pool is complete again.
 - If a backend cannot start (missing binary, palace error) after 3 attempts in
   a row, it is marked **failed** on the MCP page; **Restart** tries again.
 - Sessions belong to Butler, not to a process: rotations and crashes do not

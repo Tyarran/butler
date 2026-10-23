@@ -6,7 +6,6 @@ defmodule Butler.MCPTest do
   alias Butler.MCP
   alias Butler.MCP.BackendSupervisor
   alias Butler.MCP.Sessions
-  alias Butler.MCP.Worker
 
   @fake Path.expand("../support/fake_mcp.sh", __DIR__)
 
@@ -15,6 +14,7 @@ defmodule Butler.MCPTest do
 
     Application.put_env(:butler, :mcp,
       idle_rotation_ms: 60_000,
+      pool_size: 2,
       startup_timeout_ms: 5_000,
       backends: %{full: [bin: @fake], light: [bin: @fake]}
     )
@@ -175,7 +175,12 @@ defmodule Butler.MCPTest do
     assert MCP.restart(:light) == :ok
 
     new_light = Enum.find(MCP.status(), &(&1.id == :light))
-    assert new_light.rotations == 1 or new_light.active.pid == light.standby.pid
+    assert new_light.rotations == 1
+
+    assert Enum.all?(
+             new_light.workers,
+             &(&1.pid not in Enum.map(light.workers, fn w -> w.pid end))
+           )
   end
 
   test "a backend that cannot start is reported as an error to the client" do
@@ -292,10 +297,7 @@ defmodule Butler.MCPTest do
 
   describe "suspend/0, resume/0 and drain/1" do
     defp live_os_pids do
-      for %{active: active, standby: standby} <- MCP.status(),
-          view <- [active, standby],
-          view,
-          do: view.os_pid
+      for %{workers: workers} <- MCP.status(), worker <- workers, do: worker.os_pid
     end
 
     defp worker_children do
@@ -312,7 +314,7 @@ defmodule Butler.MCPTest do
 
       assert MCP.suspend() == :ok
 
-      assert Enum.all?(MCP.status(), &(&1.status == :suspended and is_nil(&1.active)))
+      assert Enum.all?(MCP.status(), &(&1.status == :suspended and &1.workers == []))
       assert worker_children() == [0, 0]
       assert Enum.all?(os_pids, &(not File.exists?("/proc/#{&1}")))
 
@@ -348,10 +350,10 @@ defmodule Butler.MCPTest do
     test "drain waits for a request in flight, and times out when it hangs" do
       start_mcp!()
       session = initialize!(:light)
-      %{active: %{pid: worker}} = await_light_ready()
+      await_all_ready()
 
       task = Task.async(fn -> MCP.handle(:light, session, request("hang", 5)) end)
-      await_pending(worker)
+      await_pending(:light)
 
       assert MCP.drain(100) == :timeout
 
@@ -366,16 +368,14 @@ defmodule Butler.MCPTest do
       assert MCP.resume() == :ok
     end
 
-    defp await_light_ready do
-      await_all_ready()
-      Enum.find(MCP.status(), &(&1.id == :light))
-    end
+    # Round-robin: any worker of the backend may hold the request.
+    defp await_pending(backend, tries \\ 100_000) do
+      %{workers: workers} = Enum.find(MCP.status(), &(&1.id == backend))
 
-    defp await_pending(worker, tries \\ 100_000) do
       cond do
-        Worker.info(worker).pending > 0 -> :ok
+        Enum.any?(workers, &(&1.pending > 0)) -> :ok
         tries == 0 -> flunk("request never became pending")
-        true -> await_pending(worker, tries - 1)
+        true -> await_pending(backend, tries - 1)
       end
     end
   end
