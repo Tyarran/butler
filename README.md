@@ -3,8 +3,8 @@
 <p align="center"><strong>A local job queue, worker and dashboard that replace the MemPalace Python daemon</strong></p>
 
 <p align="center">
-  <a href="https://github.com/OWNER/butler/actions/workflows/ci.yml">
-    <img src="https://github.com/OWNER/butler/actions/workflows/ci.yml/badge.svg" alt="CI">
+  <a href="https://github.com/Tyarran/butler/actions/workflows/ci.yml">
+    <img src="https://github.com/Tyarran/butler/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI">
   </a>
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
 </p>
@@ -55,7 +55,7 @@ with `mempalace` in your `PATH`. Linux only (the legacy-daemon check and the
 orphan reaper use `/proc`).
 
 ```bash
-git clone https://github.com/OWNER/butler.git
+git clone https://github.com/Tyarran/butler.git
 cd butler
 mise install        # Erlang 29 + Elixir 1.20.3-otp-29
 mise run setup      # dependencies and assets
