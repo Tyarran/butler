@@ -2,31 +2,57 @@ defmodule ButlerWeb.JobController do
   @moduledoc """
   Asynchronous job API (`/api/v1/jobs`), see `docs/api.md`.
 
-  `POST` validates the body and the payload of the kind
-  (`Butler.Jobs.Kinds.validate_payload/2`), enqueues and answers `202` at
+  `POST` validates the body (`ButlerWeb.API.JobParams`) and the payload of the
+  kind (`Butler.Jobs.Kinds.validate_payload/2`), enqueues and answers `202` at
   once; `GET` reads a job. Maintenance kinds are UI-only (`403`).
   """
   use ButlerWeb, :controller
+  use OpenApiSpex.ControllerSpecs
 
   alias Butler.Jobs.Job
-  alias Butler.Jobs.Kinds
   alias Butler.Jobs.Queue
+  alias ButlerWeb.API.JobParams
+  alias ButlerWeb.API.RenderError
+  alias ButlerWeb.API.Schemas.ErrorResponse
+  alias ButlerWeb.API.Schemas.JobCreatedResponse
+  alias ButlerWeb.API.Schemas.JobRequest
+  alias ButlerWeb.API.Schemas.JobResponse
   alias ButlerWeb.APIError
   alias ButlerWeb.JobJSON
 
-  @body_keys ~w(kind payload dedupe_key priority)
-  @max_dedupe_key 200
-  @max_priority 1_000_000
+  # The cast only checks the shape and renders through `RenderError`; the
+  # controller keeps its string-keyed `params` and `body_params`.
+  plug OpenApiSpex.Plug.CastAndValidate,
+       [render_error: RenderError, replace_params: false] when action == :create
+
+  tags(["jobs"])
+
+  operation(:create,
+    summary: "Enqueue a job",
+    description: """
+    Validates the body and the payload of the kind, enqueues the job and answers
+    at once. A job with the same `dedupe_key` still queued or running is
+    returned instead (`deduplicated: true`).
+    """,
+    request_body: {"The job to enqueue", "application/json", JobRequest, required: true},
+    responses: [
+      accepted: {"The job, new or deduplicated", "application/json", JobCreatedResponse},
+      bad_request:
+        {"Malformed body or payload (invalid_payload)", "application/json", ErrorResponse},
+      unauthorized: {"Missing or wrong token (unauthorized)", "application/json", ErrorResponse},
+      forbidden:
+        {"Not a loopback client (forbidden) or UI-only kind (kind_not_allowed)",
+         "application/json", ErrorResponse},
+      request_entity_too_large: {"Body over 1 MB (too_large)", "application/json", ErrorResponse},
+      unprocessable_entity: {"Unknown kind (unknown_kind)", "application/json", ErrorResponse},
+      service_unavailable:
+        {"Queue not running (queue_unavailable)", "application/json", ErrorResponse}
+    ]
+  )
 
   @doc "Enqueues a job."
   def create(conn, _params) do
-    with {:ok, body} <- object(conn.body_params),
-         :ok <- known_keys(body),
-         {:ok, kind} <- kind(body),
-         {:ok, dedupe_key} <- dedupe_key(body),
-         {:ok, priority} <- priority(body),
-         {:ok, payload} <- payload(kind, body),
-         attrs = %{kind: kind, payload: payload, dedupe_key: dedupe_key, priority: priority},
+    with {:ok, attrs} <- JobParams.validate(conn.body_params),
          {:ok, %Job{} = job, outcome} <- enqueue(attrs) do
       conn
       |> put_status(202)
@@ -37,6 +63,28 @@ defmodule ButlerWeb.JobController do
         APIError.render(conn, status, code, message, field)
     end
   end
+
+  operation(:show,
+    summary: "Show a job",
+    description: "The payload (verbatim content) is only returned with `include_payload=true`.",
+    parameters: [
+      id: [in: :path, description: "The job id", type: :string, required: true],
+      include_payload: [
+        in: :query,
+        description: "Only the literal `true` includes the payload; any other value omits it.",
+        type: :boolean,
+        required: false
+      ]
+    ],
+    responses: [
+      ok: {"The job", "application/json", JobResponse},
+      unauthorized: {"Missing or wrong token (unauthorized)", "application/json", ErrorResponse},
+      forbidden: {"Not a loopback client (forbidden)", "application/json", ErrorResponse},
+      not_found: {"Unknown job id (not_found)", "application/json", ErrorResponse},
+      service_unavailable:
+        {"Queue not running (queue_unavailable)", "application/json", ErrorResponse}
+    ]
+  )
 
   @doc "Shows a job; the payload only with `?include_payload=true`."
   def show(conn, %{"id" => id} = params) do
@@ -56,65 +104,6 @@ defmodule ButlerWeb.JobController do
 
   defp unavailable(conn),
     do: APIError.render(conn, 503, "queue_unavailable", "The job queue is unavailable")
-
-  defp invalid(field, message), do: {:error, 400, "invalid_payload", message, field}
-
-  defp object(%{"_json" => _other}), do: invalid(nil, "The body must be a JSON object")
-  defp object(%{} = body), do: {:ok, body}
-
-  defp known_keys(body) do
-    case Enum.find(Map.keys(body), &(&1 not in @body_keys)) do
-      nil -> :ok
-      "palace_path" -> invalid("palace_path", "palace_path is not accepted: Butler uses its own")
-      key -> invalid(key, "Unknown key")
-    end
-  end
-
-  defp kind(%{"kind" => kind}) when is_binary(kind) do
-    cond do
-      kind not in Kinds.kinds() -> {:error, 422, "unknown_kind", "Unknown kind: #{kind}", "kind"}
-      Kinds.api_kind?(kind) -> {:ok, kind}
-      true -> {:error, 403, "kind_not_allowed", "Kind #{kind} is not available over HTTP", "kind"}
-    end
-  end
-
-  defp kind(_body), do: invalid("kind", "kind is required and must be a string")
-
-  defp dedupe_key(%{"dedupe_key" => key}) when is_binary(key) do
-    if key != "" and String.length(key) <= @max_dedupe_key,
-      do: {:ok, key},
-      else: invalid("dedupe_key", "dedupe_key must be 1 to #{@max_dedupe_key} characters")
-  end
-
-  defp dedupe_key(%{"dedupe_key" => nil}), do: {:ok, nil}
-
-  defp dedupe_key(%{"dedupe_key" => _other}),
-    do: invalid("dedupe_key", "dedupe_key must be a string")
-
-  defp dedupe_key(_body), do: {:ok, nil}
-
-  defp priority(%{"priority" => priority})
-       when is_integer(priority) and abs(priority) <= @max_priority,
-       do: {:ok, priority}
-
-  defp priority(%{"priority" => priority}) when is_integer(priority),
-    do: invalid("priority", "priority must be between -#{@max_priority} and #{@max_priority}")
-
-  defp priority(%{"priority" => nil}), do: {:ok, 0}
-  defp priority(%{"priority" => _other}), do: invalid("priority", "priority must be an integer")
-  defp priority(_body), do: {:ok, 0}
-
-  defp payload(kind, body) do
-    case Kinds.validate_payload(kind, Map.get(body, "payload")) do
-      {:ok, payload} -> {:ok, payload}
-      {:error, {:invalid, field, message}} -> invalid(payload_field(field), message)
-      {:error, :unknown_kind} -> {:error, 422, "unknown_kind", "Unknown kind: #{kind}", "kind"}
-    end
-  end
-
-  defp payload_field(nil), do: nil
-  defp payload_field("payload"), do: "payload"
-  defp payload_field(field), do: "payload." <> field
 
   defp enqueue(attrs) do
     case Queue.enqueue(Queue, attrs) do

@@ -22,6 +22,25 @@ queue answers `503 queue_unavailable`.
   `403`/`401` without Butler reading or parsing its body.
 - Request bodies are capped at 1 000 000 bytes -> `413 too_large` (only for
   authenticated callers).
+- `POST /api/v1/jobs` takes `Content-Type: application/json` only; any other
+  content type is refused with `400 invalid_payload` (or the body error that
+  applies).
+
+## OpenAPI document and Swagger UI
+
+The API is described by an OpenAPI 3 document (code-first, `ButlerWeb.API.Spec`),
+which covers `POST /api/v1/jobs`, `GET /api/v1/jobs/{id}` and
+`GET /api/v1/health`:
+
+- `GET /openapi`: the document, as JSON.
+- `GET /swaggerui`: an interactive Swagger UI rendering it (served from
+  Butler's own assets, no CDN).
+
+Both live **outside** `/api`, so they need **no token**, but they are loopback
+only (same `403 forbidden` checks as the API). The API calls themselves still
+need the Bearer token: in Swagger UI click *Authorize* and paste the content of
+`<state dir>/token` to use *Try it out*. The document is a description, not the
+authority: the rules below (and the `error.code` table) are what Butler enforces.
 
 ## Errors
 

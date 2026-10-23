@@ -29,7 +29,8 @@ defmodule ButlerWeb.JobControllerTest do
     {:ok, conn: conn, token: token}
   end
 
-  defp submit(conn, body), do: post(conn, ~p"/api/v1/jobs", body)
+  # The API is JSON only: a map body would be sent as multipart by the test adapter.
+  defp submit(conn, body), do: raw(conn, Jason.encode!(body))
 
   defp raw(conn, body) do
     conn |> put_req_header("content-type", "application/json") |> post(~p"/api/v1/jobs", body)

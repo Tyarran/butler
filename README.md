@@ -135,6 +135,11 @@ pi-palace (the only client) submits `mine`, `sweep`, `sync`, `diary_write` and
 token is Butler's own, in `<state dir>/token`. `repair`, `compress` and
 `migrate-wings` are UI-only.
 
+The API is described by an OpenAPI 3 document at
+`http://localhost:4000/openapi` and explored with a Swagger UI at
+`http://localhost:4000/swaggerui` (both loopback only, no token needed to
+read them; use *Authorize* with the Bearer token to try calls).
+
 ## MCP proxy
 
 Each agent session normally starts its own `mempalace-mcp` Python process, and

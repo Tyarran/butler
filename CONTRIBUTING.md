@@ -87,6 +87,30 @@ These are non-negotiable and covered by tests (see also [AGENTS.md](AGENTS.md)):
    `repair`, `compress`, `migrate-wings` or `sync --apply` against a real
    palace.
 
+## HTTP API and OpenAPI
+
+The `/api/v1` contract is documented in [docs/api.md](docs/api.md) and
+described, code-first with [open_api_spex](https://hex.pm/packages/open_api_spex),
+by `ButlerWeb.API.Spec` (the document), `ButlerWeb.API.Schemas.*` (one module
+per schema) and the `operation` declarations of `JobController` and
+`HealthController`. The document is served at `GET /openapi`, a Swagger UI at
+`GET /swaggerui` (both loopback only, no token).
+
+- A new body field goes in **both** `ButlerWeb.API.JobParams` (the validation
+  chain, the authority for error codes, messages and fields) and
+  `ButlerWeb.API.Schemas.JobRequest`. The schema must never be stricter than
+  the rules (a drift test in `test/butler_web/api/render_error_test.exs`
+  checks it); `ButlerWeb.API.RenderError` never translates cast errors, it
+  re-runs `JobParams.validate/1`. Per-kind payload rules stay in
+  `Butler.Jobs.Kinds.validate_payload/2`.
+- A new endpoint needs an `operation` and its schemas, and a conformance test
+  (`assert_operation_response` / `assert_schema`) in
+  `test/butler_web/api/spec_test.exs`.
+- Swagger UI is **vendored** (no Node/npm) in `assets/vendor`; it is bundled
+  by esbuild into `swagger.js` / `swagger.css` (separate from `app.js`). See
+  [assets/vendor/README.md](assets/vendor/README.md) for the version and how
+  to update it.
+
 ## Tests
 
 - TDD where feasible: write the failing test first.
