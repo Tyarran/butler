@@ -4,10 +4,26 @@ defmodule ButlerWeb.HealthController do
   counts. `503` (with `ok: false`) when the queue or the worker is down.
   """
   use ButlerWeb, :controller
+  use OpenApiSpex.ControllerSpecs
 
   alias Butler.Jobs.Queue
   alias Butler.Jobs.Worker
   alias Butler.Maintenance
+  alias ButlerWeb.API.Schemas.ErrorResponse
+  alias ButlerWeb.API.Schemas.HealthResponse
+
+  tags(["health"])
+
+  operation(:show,
+    summary: "Engine health",
+    responses: [
+      ok: {"The engine is healthy", "application/json", HealthResponse},
+      service_unavailable:
+        {"The queue or the worker is down (ok: false)", "application/json", HealthResponse},
+      unauthorized: {"Missing or wrong token (unauthorized)", "application/json", ErrorResponse},
+      forbidden: {"Not a loopback client (forbidden)", "application/json", ErrorResponse}
+    ]
+  )
 
   @doc "Reports the health of the engine."
   def show(conn, _params) do

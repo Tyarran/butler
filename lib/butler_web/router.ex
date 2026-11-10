@@ -22,11 +22,24 @@ defmodule ButlerWeb.Router do
     plug ButlerWeb.Plugs.LoopbackGuard
     plug ButlerWeb.Plugs.APIAuth
     plug :accepts, ["json"]
+    plug OpenApiSpex.Plug.PutApiSpec, module: ButlerWeb.API.Spec
+  end
+
+  # Loopback clients only, no token: the interactive API documentation.
+  pipeline :loopback do
+    plug ButlerWeb.Plugs.LoopbackGuard
   end
 
   # MCP proxy: no session, no CSRF, no authentication. Loopback only.
   pipeline :mcp do
     plug ButlerWeb.Plugs.LoopbackGuard
+  end
+
+  # The OpenAPI document: loopback only, no token (it is outside `/api`, which
+  # the endpoint gates with the Bearer token) and no `accepts` plug.
+  pipeline :openapi do
+    plug ButlerWeb.Plugs.LoopbackGuard
+    plug OpenApiSpex.Plug.PutApiSpec, module: ButlerWeb.API.Spec
   end
 
   scope "/api/v1", ButlerWeb do
@@ -35,6 +48,19 @@ defmodule ButlerWeb.Router do
     post "/jobs", JobController, :create
     get "/jobs/:id", JobController, :show
     get "/health", HealthController, :show
+  end
+
+  scope "/" do
+    pipe_through :openapi
+
+    get "/openapi", OpenApiSpex.Plug.RenderSpec, []
+  end
+
+  # Swagger UI: loopback + the browser pipeline (same CSP), no token.
+  scope "/", ButlerWeb do
+    pipe_through [:loopback, :browser]
+
+    get "/swaggerui", DocsController, :swagger
   end
 
   scope "/mcp", ButlerWeb do
