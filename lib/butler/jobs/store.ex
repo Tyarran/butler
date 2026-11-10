@@ -70,7 +70,7 @@ defmodule Butler.Jobs.Store do
       {where, params} = filters(state, kind)
 
       sql =
-        "SELECT * FROM jobs#{where} ORDER BY (#{@active_sql}) DESC, created_at DESC LIMIT ?"
+        "SELECT * FROM jobs#{where} ORDER BY (#{@active_sql}) DESC, created_at DESC, rowid DESC LIMIT ?"
 
       query(db, sql, params ++ [limit])
     else
