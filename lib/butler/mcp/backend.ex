@@ -9,15 +9,15 @@ defmodule Butler.MCP.Backend do
   one after the other, so spreading them is what makes the pool faster than a
   single process.
 
-  ## Rotation
+  ## Idle shutdown
 
   After `:idle_rotation_ms` without a checkout, **every** worker of the pool
-  is replaced at once by fresh ones (which gives the memory of the old
-  processes back to the OS). The rotation happens even when nobody used the
-  backend, and is postponed while a request is in flight. Requests arriving
-  while the new workers start wait for the first ready one. With
-  `idle_rotation_ms: 0` there is no automatic rotation at all; `restart/1`
-  still replaces the whole pool.
+  is stopped (which gives the memory of the processes back to the OS) and
+  none is started on the timer: the backend is `:idle`. The shutdown is
+  postponed while a request is in flight. The next checkout wakes the
+  backend: the pool starts on demand and the request waits for the first
+  ready worker. With `idle_rotation_ms: 0` there is no automatic shutdown at
+  all; `restart/1` still replaces the whole pool.
 
   ## Crashes and failures
 
@@ -36,6 +36,8 @@ defmodule Butler.MCP.Backend do
     * `:ready` - all `:pool_size` workers are ready
     * `:degraded` - some, but not all, workers are ready
     * `:failed` - gave up starting workers
+    * `:idle` - intentionally stopped after the idle timeout; the next
+      checkout starts the pool again
 
     * `:suspended` - maintenance: every worker is stopped (`suspend/2`) and
       none is started until `resume/1`; checkouts fail with
@@ -55,7 +57,7 @@ defmodule Butler.MCP.Backend do
   @suspend_timeout_ms 60_000
   @drain_poll_ms 50
 
-  @type status :: :starting | :ready | :degraded | :failed | :suspended
+  @type status :: :starting | :ready | :degraded | :failed | :suspended | :idle
 
   @typedoc "A live worker, as shown to the UI."
   @type worker_view :: %{
@@ -105,6 +107,7 @@ defmodule Butler.MCP.Backend do
     cursor: 0,
     failed?: false,
     suspended?: false,
+    idle?: false,
     failures: 0,
     waiters: %{},
     requests: 0,
@@ -243,12 +246,20 @@ defmodule Butler.MCP.Backend do
   def handle_call(:resume, _from, %{suspended?: false} = state), do: {:reply, :ok, state}
 
   def handle_call(:resume, _from, state) do
-    state = %{state | suspended?: false, failures: 0, last_error: nil, failed?: false}
+    state = %{
+      state
+      | suspended?: false,
+        idle?: false,
+        failures: 0,
+        last_error: nil,
+        failed?: false
+    }
+
     {:reply, :ok, state |> ensure_workers() |> broadcast()}
   end
 
   def handle_call(:restart, _from, state) do
-    state = %{state | failures: 0, last_error: nil, failed?: false}
+    state = %{state | failures: 0, last_error: nil, failed?: false, idle?: false}
     {:reply, :ok, state |> replace_pool() |> broadcast()}
   end
 
@@ -308,6 +319,10 @@ defmodule Butler.MCP.Backend do
     {:reply, {:error, {:failed, state.last_error}}, state}
   end
 
+  defp checkout_unavailable(from, %{idle?: true} = state) do
+    checkout_unavailable(from, state |> wake() |> broadcast())
+  end
+
   defp checkout_unavailable(from, state) do
     token = make_ref()
     timer = Process.send_after(self(), {:waiter_timeout, token}, state.startup_timeout_ms)
@@ -348,6 +363,7 @@ defmodule Butler.MCP.Backend do
 
   defp ensure_workers(%{suspended?: true} = state), do: state
   defp ensure_workers(%{failed?: true} = state), do: state
+  defp ensure_workers(%{idle?: true} = state), do: state
 
   defp ensure_workers(%{failures: failures, max_failures: max} = state) when failures >= max do
     state
@@ -435,7 +451,15 @@ defmodule Butler.MCP.Backend do
     end)
 
     state = cancel_rotation(state)
-    %{state | workers: %{}, waiters: %{}, suspended?: true}
+    %{state | workers: %{}, waiters: %{}, suspended?: true, idle?: false}
+  end
+
+  defp wake(state) do
+    %{state | idle?: false} |> ensure_workers()
+  end
+
+  defp idle_shutdown(state) do
+    %{replace_all_workers(state) | idle?: true, rotations: state.rotations + 1}
   end
 
   # Replaces every worker with a fresh one. Counts a rotation when there was
@@ -477,14 +501,14 @@ defmodule Butler.MCP.Backend do
 
   # -- rotation ---------------------------------------------------------
 
-  # Automatic rotation: the whole pool, unless a request is in flight.
+  # Idle shutdown: the whole pool, unless a request is in flight.
   defp rotate(state) do
     ready = ready_pids(state)
 
     cond do
       ready == [] -> schedule_rotation(state)
       Enum.any?(ready, &(pending(&1) > 0)) -> schedule_rotation(state, @busy_retry_ms)
-      true -> replace_pool(state)
+      true -> idle_shutdown(state)
     end
   end
 
@@ -550,6 +574,7 @@ defmodule Butler.MCP.Backend do
 
   defp status_of(%{suspended?: true}, _ready), do: :suspended
   defp status_of(%{failed?: true}, _ready), do: :failed
+  defp status_of(%{idle?: true}, _ready), do: :idle
   defp status_of(_state, 0), do: :starting
   defp status_of(%{pool_size: size}, ready) when ready < size, do: :degraded
   defp status_of(_state, _ready), do: :ready

@@ -198,6 +198,66 @@ defmodule Butler.MCPTest do
     assert [_full, %{status: :failed}] = MCP.status()
   end
 
+  describe "idle shutdown" do
+    defp start_idle_mcp! do
+      Application.put_env(:butler, :mcp,
+        idle_rotation_ms: 300,
+        pool_size: 2,
+        startup_timeout_ms: 5_000,
+        backends: %{full: [bin: @fake], light: [bin: @fake]}
+      )
+
+      start_mcp!()
+    end
+
+    defp backend_status(backend), do: Enum.find(MCP.status(), &(&1.id == backend))
+
+    defp await_backend(backend, fun) do
+      snapshot = backend_status(backend)
+
+      if fun.(snapshot) do
+        snapshot
+      else
+        receive do
+          {:mcp_changed, _backend} -> await_backend(backend, fun)
+        after
+          5_000 -> flunk("condition never met: #{inspect(snapshot)}")
+        end
+      end
+    end
+
+    test "a session survives the idle shutdown and wakes only its backend" do
+      start_idle_mcp!()
+      session = initialize!(:light)
+      await_backend(:light, &(&1.status == :idle))
+      await_backend(:full, &(&1.status == :idle))
+
+      assert Sessions.validate(session, :light) == :ok
+
+      assert {:json, %{"result" => %{"method" => "ping"}}} =
+               MCP.handle(:light, session, request("ping", 2))
+
+      assert backend_status(:full).status == :idle
+      assert backend_status(:full).workers == []
+    end
+
+    test "requests that need no worker do not wake an idle backend" do
+      start_idle_mcp!()
+      session = initialize!(:light)
+      await_backend(:light, &(&1.status == :idle))
+      notification = %{"jsonrpc" => "2.0", "method" => "notifications/initialized"}
+
+      assert MCP.handle(:light, session, notification) == :accepted
+      assert MCP.handle(:light, nil, request("ping", 5)) |> elem(0) == :bad_request
+      assert MCP.handle(:light, "nope", request("ping", 5)) == :unknown_session
+
+      assert {:json, %{"error" => %{"message" => "write tools" <> _}}} =
+               MCP.handle(:light, session, call_tool("mempalace_add_drawer"))
+
+      assert %{status: :idle, workers: []} = backend_status(:light)
+    end
+  end
+
   defp call_tool(name), do: Map.put(request("tools/call", 7), "params", %{"name" => name})
 
   defp requests(backend), do: Enum.find(MCP.status(), &(&1.id == backend)).requests

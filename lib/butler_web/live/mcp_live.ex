@@ -1,7 +1,7 @@
 defmodule ButlerWeb.MCPLive do
   @moduledoc """
   MCP proxy page: state of each backend (`full`, `light`), its pool of
-  workers, time before the next rotation (or "disabled"), client sessions,
+  workers, time before the next idle shutdown (or "disabled"), client sessions,
   requests, and a forced restart.
 
   The page only observes `Butler.MCP`; the proxy works without it. It
@@ -19,6 +19,7 @@ defmodule ButlerWeb.MCPLive do
     ready: "badge-success",
     degraded: "badge-warning",
     starting: "badge-info",
+    idle: "badge-neutral",
     failed: "badge-error"
   }
 
@@ -69,6 +70,7 @@ defmodule ButlerWeb.MCPLive do
   defp pid_text(%{os_pid: os_pid}), do: Integer.to_string(os_pid)
 
   defp rotation_text(%{idle_rotation_ms: 0}, _now_ms), do: "disabled"
+  defp rotation_text(%{status: :idle}, _now_ms), do: "stopped (starts on next request)"
   defp rotation_text(backend, now_ms), do: countdown(backend.next_rotation_at, now_ms)
 
   defp error_text(nil), do: nil
@@ -136,7 +138,7 @@ defmodule ButlerWeb.MCPLive do
             </dd>
           </div>
           <div>
-            <dt class="text-xs uppercase opacity-60">Next rotation</dt>
+            <dt class="text-xs uppercase opacity-60">Next idle shutdown</dt>
             <dd id={"rotation-#{backend.id}"} class="text-sm tabular-nums">
               {rotation_text(backend, @now_ms)}
               <span :if={backend.idle_rotation_ms > 0} class="opacity-60">
@@ -145,7 +147,7 @@ defmodule ButlerWeb.MCPLive do
             </dd>
           </div>
           <div>
-            <dt class="text-xs uppercase opacity-60">Rotations</dt>
+            <dt class="text-xs uppercase opacity-60">Pool recycles</dt>
             <dd id={"rotations-#{backend.id}"} class="text-sm tabular-nums">{backend.rotations}</dd>
           </div>
         </dl>
