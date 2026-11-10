@@ -7,7 +7,8 @@ defmodule Butler.MCP.Config do
 
     * `BUTLER_MCP_ENABLED` - `false` disables the proxy (default: enabled)
     * `BUTLER_MCP_ROTATION_MINUTES` - idle delay before the processes of a
-      backend are recycled (default `10`, `0` turns the rotation off)
+      backend are stopped; the next request restarts them (default `10`, `0`
+      turns the idle shutdown off)
     * `BUTLER_MCP_POOL_SIZE` - processes per backend (default `4`)
     * `BUTLER_MCP_FULL_BIN` - `mempalace-mcp` executable
     * `BUTLER_MCP_LIGHT_BIN` - `mempalace-light-mcp` executable
@@ -48,12 +49,13 @@ defmodule Butler.MCP.Config do
 
   @doc """
   Idle delay, in milliseconds, after which the processes of a backend are
-  rotated. `0` means the rotation is off.
+  stopped (restarted lazily by the next request). `0` means the idle
+  shutdown is off.
   """
   @spec idle_rotation_ms() :: non_neg_integer()
   def idle_rotation_ms, do: get(:idle_rotation_ms, @default_idle_rotation_ms)
 
-  @doc "Whether idle backends are rotated (`idle_rotation_ms/0` is not `0`)."
+  @doc "Whether idle backends are shut down (`idle_rotation_ms/0` is not `0`)."
   @spec rotation_enabled?() :: boolean()
   def rotation_enabled?, do: idle_rotation_ms() > 0
 

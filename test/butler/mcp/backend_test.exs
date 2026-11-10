@@ -133,15 +133,66 @@ defmodule Butler.MCP.BackendTest do
   end
 
   describe "rotation" do
-    test "the whole pool is replaced after the idle delay" do
+    test "the whole pool is stopped after the idle delay and not restarted" do
       backend = start_backend!(idle_rotation_ms: 300)
       first = await_ready(backend)
 
-      second = await_status(backend, &(&1.rotations >= 1 and &1.status == :ready))
-
-      assert second.pool_size == 3
-      assert Enum.all?(pids(second), &(&1 not in pids(first)))
+      second = await_status(backend, &(&1.status == :idle))
       Enum.each(os_pids(first), &wait_dead/1)
+      pause(400)
+
+      third = Backend.status(backend)
+      assert third.status == :idle
+      assert third.workers == []
+      assert third.next_rotation_at == nil
+      assert second.rotations == 1
+    end
+
+    test "a checkout wakes an idle backend" do
+      backend = start_backend!(idle_rotation_ms: 300)
+      first = await_ready(backend)
+      await_status(backend, &(&1.status == :idle))
+
+      assert {:ok, worker} = Backend.checkout(backend)
+      assert {:ok, _answer} = Worker.call(worker, request("ping"))
+
+      second = await_ready(backend)
+      assert Enum.all?(pids(second), &(&1 not in pids(first)))
+    end
+
+    test "concurrent checkouts on an idle backend start a single pool" do
+      backend = start_backend!(idle_rotation_ms: 300)
+      await_ready(backend)
+      await_status(backend, &(&1.status == :idle))
+
+      workers =
+        1..6
+        |> Enum.map(fn _i -> Task.async(fn -> Backend.checkout(backend) end) end)
+        |> Task.await_many()
+
+      assert Enum.all?(workers, &match?({:ok, pid} when is_pid(pid), &1))
+      assert %{workers: workers} = await_ready(backend)
+      assert length(workers) == 3
+    end
+
+    test "status reads do not wake an idle backend" do
+      backend = start_backend!(idle_rotation_ms: 300)
+      await_ready(backend)
+      await_status(backend, &(&1.status == :idle))
+
+      pause(100)
+
+      assert %{status: :idle, workers: []} = Backend.status(backend)
+    end
+
+    test "restart starts a fresh pool on an idle backend" do
+      backend = start_backend!(idle_rotation_ms: 300)
+      await_ready(backend)
+      await_status(backend, &(&1.status == :idle))
+
+      assert :ok = Backend.restart(backend)
+
+      assert %{ready: 3} = await_ready(backend)
     end
 
     test "is off when the idle delay is 0" do
