@@ -53,6 +53,16 @@ defmodule Butler.Jobs.StoreTest do
       assert ids(Store.list(db)) == ["new-running", "old-queued", "new-done", "old-done"]
     end
 
+    test "breaks created_at ties by insertion order, newest first", %{path: path, db: db} do
+      created_at = QueueFixture.iso_ago(100)
+
+      for id <- ~w(z y x) do
+        QueueFixture.insert_job!(path, id: id, state: "queued", created_at: created_at)
+      end
+
+      assert ids(Store.list(db)) == ~w(x y z)
+    end
+
     test "filters by state", %{path: path, db: db} do
       QueueFixture.insert_job!(path, id: "a", state: "failed")
       QueueFixture.insert_job!(path, id: "b", state: "succeeded")
